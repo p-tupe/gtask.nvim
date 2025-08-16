@@ -1,0 +1,6 @@
+-- Vim/Neovim swap files
+*.swp
+*.swo
+*.swn
+*.swh
+lua/gtask/config.lua
