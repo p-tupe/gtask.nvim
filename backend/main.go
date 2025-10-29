@@ -258,7 +258,7 @@ func (s *Server) handleToken(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(resp.StatusCode)
 
-	var result map[string]interface{}
+	var result map[string]any
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		log.Printf("Error decoding Google response: %v", err)
 		http.Error(w, "Failed to parse token response", http.StatusInternalServerError)
@@ -314,7 +314,7 @@ func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(resp.StatusCode)
 
-	var result map[string]interface{}
+	var result map[string]any
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		log.Printf("Error decoding Google response: %v", err)
 		http.Error(w, "Failed to parse refresh response", http.StatusInternalServerError)
@@ -383,7 +383,7 @@ func (s *Server) handleCallback(w http.ResponseWriter, r *http.Request) {
 		}
 		defer resp.Body.Close()
 
-		var tokens map[string]interface{}
+		var tokens map[string]any
 		if err := json.NewDecoder(resp.Body).Decode(&tokens); err != nil {
 			log.Printf("Error decoding token response in callback: %v", err)
 			return
@@ -445,7 +445,7 @@ func (s *Server) handlePoll(w http.ResponseWriter, r *http.Request) {
 	if !exists {
 		// Not completed yet
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		json.NewEncoder(w).Encode(map[string]any{
 			"completed": false,
 		})
 		return
@@ -457,7 +457,7 @@ func (s *Server) handlePoll(w http.ResponseWriter, r *http.Request) {
 	s.mutex.Unlock()
 
 	w.Header().Set("Content-Type", "application/json")
-	response := map[string]interface{}{
+	response := map[string]any{
 		"completed": true,
 		"tokens":    authData.Tokens,
 	}
@@ -471,7 +471,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	response := map[string]interface{}{
+	response := map[string]any{
 		"status":    "ok",
 		"timestamp": time.Now().Format(time.RFC3339),
 	}
