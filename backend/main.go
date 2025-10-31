@@ -14,7 +14,6 @@ import (
 	"time"
 )
 
-// PKCE state storage
 type PKCEState struct {
 	CodeVerifier string
 	Timestamp    int64
@@ -33,10 +32,10 @@ type Server struct {
 }
 
 type GoogleConfig struct {
-	ClientID     string
-	ClientSecret string
-	RedirectURI  string
-	Scope        string
+	ClientID     string `json:"client_id"`
+	ClientSecret string `json:"client_secret"`
+	RedirectURI  string `json:"-"`
+	Scope        string `json:"-"`
 }
 
 type AuthStartResponse struct {
@@ -60,10 +59,18 @@ type ErrorResponse struct {
 
 func NewServer() *Server {
 	config := GoogleConfig{
-		ClientID:     getEnvOrDefault("GOOGLE_CLIENT_ID", "your-client-id-here"),
-		ClientSecret: getEnvOrDefault("GOOGLE_CLIENT_SECRET", "your-client-secret-here"),
-		RedirectURI:  getEnvOrDefault("REDIRECT_URI", "http://127.0.0.1:8080"),
-		Scope:        "https://www.googleapis.com/auth/tasks",
+		RedirectURI: "http://127.0.0.1:3000/auth/callback",
+		Scope:       "https://www.googleapis.com/auth/tasks",
+	}
+
+	configFile, err := os.Open("./google-auth-credentials.json")
+	if err != nil {
+		panic(err)
+	}
+
+	err = json.NewDecoder(configFile).Decode(&config)
+	if err != nil {
+		panic(err)
 	}
 
 	return &Server{
@@ -80,7 +87,6 @@ func getEnvOrDefault(key, defaultValue string) string {
 	return defaultValue
 }
 
-// Generate cryptographically secure random string
 func generateRandomString(length int) (string, error) {
 	bytes := make([]byte, length)
 	if _, err := rand.Read(bytes); err != nil {
@@ -89,7 +95,6 @@ func generateRandomString(length int) (string, error) {
 	return base64.RawURLEncoding.EncodeToString(bytes), nil
 }
 
-// Generate PKCE code verifier and challenge
 func generatePKCE() (string, string, error) {
 	codeVerifier, err := generateRandomString(96)
 	if err != nil {
@@ -102,12 +107,10 @@ func generatePKCE() (string, string, error) {
 	return codeVerifier, codeChallenge, nil
 }
 
-// Generate a UUID-like state parameter
 func generateState() (string, error) {
 	return generateRandomString(32)
 }
 
-// Clean up expired states
 func (s *Server) cleanupExpiredStates() {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
@@ -120,14 +123,12 @@ func (s *Server) cleanupExpiredStates() {
 	}
 }
 
-// Enable CORS
 func (s *Server) enableCORS(w http.ResponseWriter) {
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 }
 
-// Handle OPTIONS requests for CORS
 func (s *Server) handleOptions(w http.ResponseWriter, r *http.Request) {
 	s.enableCORS(w)
 	w.WriteHeader(http.StatusOK)

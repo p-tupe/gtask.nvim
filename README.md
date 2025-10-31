@@ -1,12 +1,10 @@
-# gtask.nvim
-
-> Under Construction
-
 <center>
 
-![gtask.nvim logo](./logo.svg)
+# gtask.nvim
 
-## Google Tasks in Neovim
+> Google Tasks in Neovim (Under Construction)
+
+![gtask.nvim logo](./logo.svg)
 
 </center>
 

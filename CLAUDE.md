@@ -261,6 +261,14 @@ lua test_pkce:*
 - **Impact**: Incorrect indentation may cause parsing issues or tasks to be skipped
 - **Note**: Based on `indent_level = math.floor(#indent_str / 2)` calculation in parser.lua:134
 
+### 9. GtaskAuth URL is hidden in neovim message buffer
+
+### 10. App isn't verified on Google
+
+### 11. gtask.nvim directory must be manually created
+
+### 12. Sync doesn't actually work, rework it
+
 ## Implementing Subtask Support
 
 This section documents how to implement parent-child task relationships (limitation #1) using the Google Tasks API.

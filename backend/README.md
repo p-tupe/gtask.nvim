@@ -10,23 +10,13 @@ A secure OAuth proxy service for gtask.nvim plugin that handles Google OAuth cre
 - `POST /auth/refresh` - Refresh expired access tokens
 - `GET /health` - Health check and status
 
-## Local Development
-
-1. **Set environment variables:**
+## Development
 
 ```bash
-# Required
-export GOOGLE_CLIENT_ID="your-dev-client-id"
-export GOOGLE_CLIENT_SECRET="your-dev-client-secret"
+# Add your credentials
+cp google-auth-credentials.example.json google-auth-credentials.json
 
-# Optional
-export REDIRECT_URI="http://localhost:3000/auth/callback"
-export PORT="3000"
-```
-
-2. **Run:**
-
-```bash
+# Run server
 go run main.go
 ```
 

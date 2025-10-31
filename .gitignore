@@ -3,6 +3,3 @@
 *.swo
 *.swn
 *.swh
-
--- Development configuration
-lua/gtask/config.lua
