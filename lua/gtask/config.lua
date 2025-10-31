@@ -35,10 +35,15 @@ local defaults = {
 		--- Default: ~/gtask.nvim if not configured
 		---@type string
 		dir = vim.fn.expand("~/gtask.nvim"),
+
+		--- Patterns to ignore when scanning for markdown files
+		--- Can be directory names (e.g., "archive") or specific .md file names (e.g., "draft.md")
+		---@type string[]
+		ignore_patterns = {},
 	},
 }
 
---- Current configuration (starts as defaults, can be modified via setup)
+--- Current configuration
 local config = vim.deepcopy(defaults)
 
 --- Update configuration with user-provided options
@@ -49,10 +54,6 @@ function M.setup(opts)
 	-- Merge user config with defaults
 	if opts.proxy_url then
 		config.proxy.base_url = opts.proxy_url
-	end
-
-	if opts.token_file then
-		config.storage.token_file = opts.token_file
 	end
 
 	if opts.markdown_dir then
@@ -73,6 +74,13 @@ function M.setup(opts)
 
 		-- Remove trailing slash for consistency
 		config.markdown.dir = expanded_path:gsub("/$", "")
+	end
+
+	if opts.ignore_patterns then
+		if type(opts.ignore_patterns) ~= "table" then
+			error("ignore_patterns must be an array of strings")
+		end
+		config.markdown.ignore_patterns = opts.ignore_patterns
 	end
 end
 

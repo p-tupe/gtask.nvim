@@ -22,6 +22,6 @@ go run main.go
 
 ## Deployment
 
-### Using Docker
-
-### Using Systemd
+```bash
+docker compose up
+```

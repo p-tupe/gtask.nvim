@@ -1,4 +1,3 @@
--- Command handler functions
 local function cmd_auth()
 	require("gtask.auth").authenticate()
 end
@@ -13,6 +12,5 @@ local function cmd_sync()
 	end)
 end
 
--- Command definitions
 vim.api.nvim_create_user_command("GtaskAuth", cmd_auth, {})
 vim.api.nvim_create_user_command("GtaskSync", cmd_sync, {})

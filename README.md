@@ -56,18 +56,18 @@ require("gtask").setup({
   markdown_dir = "~/gtask.nvim",
 
   -- Custom OAuth proxy backend URL
-  proxy_url = "https://gtask.priteshtupe.com",
+  proxy_url = "https://app.priteshtupe.com/gtask",
 
-  -- Custom token storage filename
-  token_file = "gtask_tokens.json",
+  -- Files/directories to ignore when scanning (default: {})
+  ignore_patterns = { ".git", "archive", "README.md" },
 })
 ```
 
 **Configuration Options:**
 
-- `markdown_dir` (string): **Absolute path** to your markdown directory. Default: `~/gtask.nvim`. Must start with `/` or `~` (no relative paths like `./notes`)
-- `proxy_url` (string): URL of your OAuth proxy backend. Default: `localhost:3000` for local development.
-- `token_file` (string): Filename for storing OAuth tokens in Neovim's data directory.
+- `markdown_dir` (string): **Absolute path** to your markdown directory. Must start with `/` or `~` (no relative paths like `./notes`)
+- `proxy_url` (string): URL of your OAuth proxy backend.
+- `ignore_patterns` (string[]): List of directory names or `.md` file names to ignore when scanning. Directory names will skip entire subdirectories, file names will skip specific markdown files.
 
 ### Authentication
 

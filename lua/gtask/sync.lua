@@ -4,90 +4,6 @@ local api = require("gtask.api")
 local parser = require("gtask.parser")
 local files = require("gtask.files")
 
----@class SyncState
----@field markdown_tasks Task[] Tasks parsed from markdown
----@field google_tasks table[] Tasks from Google Tasks API
----@field task_list_id string Google Tasks list ID to sync with
-
----Syncs markdown tasks from current buffer with Google Tasks
----@param task_list_id string Google Tasks list ID
----@param callback function Callback function called when sync is complete
-function M.sync_buffer_with_google(task_list_id, callback)
-	-- Get current buffer content
-	local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
-	local markdown_tasks = parser.parse_tasks(lines)
-
-	-- Fetch current Google Tasks
-	api.get_tasks(task_list_id, function(google_response, err)
-		if err then
-			vim.notify("Error fetching Google Tasks: " .. err, vim.log.levels.ERROR)
-			if callback then
-				callback(false)
-			end
-			return
-		end
-
-		local google_tasks = google_response.items or {}
-
-		-- Perform the sync
-		local sync_state = {
-			markdown_tasks = markdown_tasks,
-			google_tasks = google_tasks,
-			task_list_id = task_list_id,
-		}
-
-		M.perform_sync(sync_state, callback)
-	end)
-end
-
----Performs the actual sync operation
----@param sync_state SyncState State containing tasks to sync
----@param callback function Callback when sync is complete
-function M.perform_sync(sync_state, callback)
-	-- For now, implement a simple one-way sync: markdown -> Google Tasks
-	-- This pushes new markdown tasks to Google and updates existing ones
-
-	local operations = M.plan_sync_operations(sync_state)
-	M.execute_sync_operations(operations, sync_state.task_list_id, callback)
-end
-
----Plans what sync operations need to be performed
----@param sync_state SyncState State containing tasks to sync
----@return table[] Array of sync operations to execute
-function M.plan_sync_operations(sync_state)
-	local operations = {}
-	local google_tasks_by_title = {}
-
-	-- Index Google tasks by title for quick lookup
-	for _, gtask in ipairs(sync_state.google_tasks) do
-		google_tasks_by_title[gtask.title] = gtask
-	end
-
-	-- Process markdown tasks
-	for _, mdtask in ipairs(sync_state.markdown_tasks) do
-		local existing_gtask = google_tasks_by_title[mdtask.title]
-
-		if existing_gtask then
-			-- Task exists - check if update is needed
-			if M.task_needs_update(mdtask, existing_gtask) then
-				table.insert(operations, {
-					type = "update",
-					markdown_task = mdtask,
-					google_task = existing_gtask,
-				})
-			end
-		else
-			-- New task - needs to be created
-			table.insert(operations, {
-				type = "create",
-				markdown_task = mdtask,
-			})
-		end
-	end
-
-	return operations
-end
-
 ---Checks if a Google task needs to be updated based on markdown task
 ---@param mdtask Task Markdown task
 ---@param gtask table Google task
@@ -108,56 +24,6 @@ function M.task_needs_update(mdtask, gtask)
 	end
 
 	return false
-end
-
----Executes the planned sync operations
----@param operations table[] Operations to execute
----@param task_list_id string Google Tasks list ID
----@param callback function Callback when all operations complete
-function M.execute_sync_operations(operations, task_list_id, callback)
-	local completed_operations = 0
-	local total_operations = #operations
-	local errors = {}
-
-	if total_operations == 0 then
-		vim.notify("No sync operations needed")
-		if callback then
-			callback(true)
-		end
-		return
-	end
-
-	local function operation_complete(success, error_msg)
-		completed_operations = completed_operations + 1
-
-		if not success and error_msg then
-			table.insert(errors, error_msg)
-		end
-
-		if completed_operations >= total_operations then
-			-- All operations complete
-			if #errors > 0 then
-				vim.notify("Sync completed with errors: " .. table.concat(errors, ", "), vim.log.levels.WARN)
-				if callback then
-					callback(false)
-				end
-			else
-				vim.notify("Sync completed successfully")
-				if callback then
-					callback(true)
-				end
-			end
-		end
-	end
-
-	-- Execute each operation
-	for _, operation in ipairs(operations) do
-		if operation.type == "create" then
-			M.create_google_task(operation.markdown_task, task_list_id, operation_complete)
-		elseif operation.type == "update" then
-			M.update_google_task(operation.markdown_task, operation.google_task, task_list_id, operation_complete)
-		end
-	end
 end
 
 ---Creates a new Google task from a markdown task
@@ -364,11 +230,13 @@ function M.write_google_tasks_to_markdown(tasks, markdown_dir, list_name, callba
 
 	-- Convert new Google Tasks to markdown format
 	local new_task_lines = {}
+	local new_task_count = 0
 	for _, gtask in ipairs(tasks) do
 		-- Skip if already exists in file
 		if not existing_by_title[gtask.title] then
 			local checkbox = gtask.status == "completed" and "x" or " "
 			table.insert(new_task_lines, string.format("- [%s] %s", checkbox, gtask.title))
+			new_task_count = new_task_count + 1
 
 			-- Add description/notes if present
 			if gtask.notes and gtask.notes ~= "" then
@@ -379,7 +247,7 @@ function M.write_google_tasks_to_markdown(tasks, markdown_dir, list_name, callba
 		end
 	end
 
-	if #new_task_lines == 0 then
+	if new_task_count == 0 then
 		-- No new tasks to write
 		if callback then
 			callback(true)
@@ -422,7 +290,7 @@ function M.write_google_tasks_to_markdown(tasks, markdown_dir, list_name, callba
 	end
 	file:close()
 
-	vim.notify(string.format("Wrote %d new tasks to %s", #new_task_lines, filename))
+	vim.notify(string.format("Wrote %d new task(s) to %s", new_task_count, filename))
 	if callback then
 		callback(true)
 	end
@@ -430,6 +298,7 @@ end
 
 ---Syncs all markdown files from the configured directory with Google Tasks (2-way sync)
 ---Task list name is determined by the H1 heading in each markdown file
+---Also pulls down tasks from all Google Task lists
 ---@param callback function Callback function called when sync is complete
 function M.sync_directory_with_google(callback)
 	-- Validate directory configuration
@@ -442,52 +311,75 @@ function M.sync_directory_with_google(callback)
 		return
 	end
 
-	-- Parse all markdown files
-	vim.notify("Starting 2-way sync: scanning markdown directory...")
-	local all_file_data = files.parse_all_markdown_files()
+	vim.notify("Starting 2-way sync: scanning markdown directory and fetching Google Tasks...")
 
-	if #all_file_data == 0 then
-		vim.notify("No markdown files found in directory", vim.log.levels.WARN)
-		if callback then
-			callback(true)
+	-- First, fetch all Google Task lists
+	api.get_task_lists(function(response, api_err)
+		if api_err then
+			vim.notify("Failed to fetch Google Task lists: " .. api_err, vim.log.levels.ERROR)
+			if callback then
+				callback(false)
+			end
+			return
 		end
-		return
-	end
 
-	-- Group tasks by list name (H1 heading)
-	local lists_data = {}
-	local total_tasks = 0
+		local google_lists = response.items or {}
 
-	for _, file_data in ipairs(all_file_data) do
-		if file_data.list_name and #file_data.tasks > 0 then
-			if not lists_data[file_data.list_name] then
-				lists_data[file_data.list_name] = {
+		-- Parse all markdown files
+		local all_file_data = files.parse_all_markdown_files()
+
+		-- Group markdown tasks by list name (H1 heading)
+		local lists_data = {}
+		local total_markdown_tasks = 0
+
+		for _, file_data in ipairs(all_file_data) do
+			if file_data.list_name and #file_data.tasks > 0 then
+				if not lists_data[file_data.list_name] then
+					lists_data[file_data.list_name] = {
+						tasks = {},
+						files = {},
+					}
+				end
+
+				-- Add file metadata to tasks
+				for _, task in ipairs(file_data.tasks) do
+					task.source_file = file_data.file_name
+					task.source_file_path = file_data.file_path
+					table.insert(lists_data[file_data.list_name].tasks, task)
+				end
+
+				table.insert(lists_data[file_data.list_name].files, file_data.file_name)
+				total_markdown_tasks = total_markdown_tasks + #file_data.tasks
+			end
+		end
+
+		-- Add all Google Task lists to the sync (even if no local markdown exists)
+		for _, google_list in ipairs(google_lists) do
+			if not lists_data[google_list.title] then
+				-- List exists in Google but not locally - initialize empty
+				lists_data[google_list.title] = {
 					tasks = {},
 					files = {},
 				}
 			end
-
-			-- Add file metadata to tasks
-			for _, task in ipairs(file_data.tasks) do
-				task.source_file = file_data.file_name
-				task.source_file_path = file_data.file_path
-				table.insert(lists_data[file_data.list_name].tasks, task)
-			end
-
-			table.insert(lists_data[file_data.list_name].files, file_data.file_name)
-			total_tasks = total_tasks + #file_data.tasks
 		end
-	end
 
-	local list_count = 0
-	for _ in pairs(lists_data) do
-		list_count = list_count + 1
-	end
+		local list_count = 0
+		for _ in pairs(lists_data) do
+			list_count = list_count + 1
+		end
 
-	vim.notify(string.format("Found %d tasks across %d list(s) in %d files", total_tasks, list_count, #all_file_data))
+		vim.notify(string.format(
+			"Found %d markdown task(s) in %d file(s), %d Google list(s), syncing %d total list(s)",
+			total_markdown_tasks,
+			#all_file_data,
+			#google_lists,
+			list_count
+		))
 
-	-- Sync each list
-	M.sync_multiple_lists(lists_data, files.get_markdown_dir(), callback)
+		-- Sync each list
+		M.sync_multiple_lists(lists_data, files.get_markdown_dir(), callback)
+	end)
 end
 
 ---Syncs multiple task lists

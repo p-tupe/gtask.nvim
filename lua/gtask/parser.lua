@@ -173,29 +173,4 @@ function M.build_hierarchy(tasks)
 	end
 end
 
----Converts tasks back to markdown format
----@param tasks Task[] Array of tasks to convert
----@return string[] Array of markdown lines
-function M.tasks_to_markdown(tasks)
-	local lines = {}
-
-	for _, task in ipairs(tasks) do
-		-- Create task line
-		local indent = string.rep("  ", task.indent_level)
-		local checkbox = task.completed and "x" or " "
-		local task_line = string.format("%s- [%s] %s", indent, checkbox, task.title)
-		table.insert(lines, task_line)
-
-		-- Add description lines if present
-		if task.description then
-			local desc_indent = string.rep("  ", task.indent_level + 1)
-			for desc_line in task.description:gmatch("[^\n]+") do
-				table.insert(lines, desc_indent .. desc_line)
-			end
-		end
-	end
-
-	return lines
-end
-
 return M
