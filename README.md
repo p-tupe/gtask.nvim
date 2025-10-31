@@ -1,8 +1,14 @@
-# Gtask.nvim
+# gtask.nvim
 
 > Under Construction
 
-Google Tasks in Neovim
+<center>
+
+![gtask.nvim logo](./logo.svg)
+
+## Google Tasks in Neovim
+
+</center>
 
 ## Motivation
 
@@ -16,27 +22,24 @@ First and foremost, my aim to have tasks slot into my current workflow. By that,
 
 For e.g., if I were to start a new note for "travel plan 3025" I would like to add tasks right inside the rest of the plan.
 
-```
-# Travel Plan 3025 <-- This is a new task list
+```markdown
+# Travel Plan 3025 `<-- This is a tasks list`
 
-## Let's go to Mars!
+## Let's go to Mars! `<-- List description (not stored in gtasks!)`
 
-... notes on space regulations
+... more notes on space regulations
 
-- [ ] Check visa requirements <-- This is a task
+- [ ] Check visa requirements | 2025-10-31 `<-- This is a task with "title" | "due date"`
 
-    Notes on visa requirements when checking <-- This is the task's description
+  Notes on visa requirements when checking `<-- This is the task's description`
+  - [ ] Contact Martian friend who knows stuff `<-- This becomes a sub-task`
 
-    - [ ] Contact Martian friend who knows stuff <-- This becomes a sub-task
-
-        Friend's contact number: xxx-yyy-zz <-- This is sub-task's description (note the spacing)
+    Friend's contact number: xxx-yyy-zz `<-- This is sub-task's description (note the spacing)`
 ```
 
 One of the major issues I face is that the "description" field is extremely cumbersome to use. Unable to add any formatting, and the way it is shown is downright horrendous. In here though, it's just another markdown content block. Neat, eh? The next issue is the subtask management in official apps - they are treated as second class citizens. Here they are not.
 
-## Setup
-
-### Installation
+## Installation
 
 Using your favorite plugin manager:
 
@@ -47,7 +50,7 @@ Using your favorite plugin manager:
   "your-username/gtask.nvim",
   dependencies = { "nvim-lua/plenary.nvim" },
   config = function()
-    -- Optional configuration
+    require('gtask').setup()
   end
 }
 ```
@@ -57,9 +60,37 @@ Using your favorite plugin manager:
 ```lua
 use {
   "your-username/gtask.nvim",
-  requires = { "nvim-lua/plenary.nvim" }
+  requires = { "nvim-lua/plenary.nvim" },
+  config = function()
+    require('gtask').setup()
+  end
 }
+
+See [#Backend Setup]() for hosting your own backend auth client.
 ```
+
+## Configuration
+
+The plugin works out of the box with default settings, but you can customize it:
+
+```lua
+require('gtask').setup({
+  -- Absolute path to markdown directory
+  markdown_dir = "~/gtask.nvim",
+
+  -- Custom OAuth proxy backend URL
+  proxy_url = "http://localhost:3000",
+
+  -- Custom token storage filename
+  token_file = "gtask_tokens.json",
+})
+```
+
+**Configuration Options:**
+
+- `markdown_dir` (string): **Absolute path** to your markdown directory. Default: `~/gtask.nvim`. Must start with `/` or `~` (no relative paths like `./notes`)
+- `proxy_url` (string): URL of your OAuth proxy backend. Default: `localhost:3000` for local development.
+- `token_file` (string): Filename for storing OAuth tokens in Neovim's data directory.
 
 ### Authentication
 
@@ -76,75 +107,72 @@ The plugin uses a secure OAuth proxy service for authentication. No manual Googl
 
 ### Available Commands
 
-#### Authentication
+The plugin provides only two simple commands:
 
-- `:GtaskAuth` - Start OAuth authentication flow
-- `:GtaskClearAuth` - Clear stored tokens (force re-authentication)
-- `:GtaskAuthTest` - Test authentication server (development)
+- **`:GtaskAuth`** - Authenticate with Google (clears any previous authentication and forces re-auth)
+- **`:GtaskSync`** - Perform 2-way sync between your markdown directory and Google Tasks
 
-#### Task Management
+That's it! Simple and focused.
 
-- `:GtaskGetLists` - Fetch and display all task lists
-- `:GtaskGetTasks <list_id>` - Fetch and print tasks for a specific list
-- `:GtaskView <list_id>` - Open formatted task view in new buffer
+## How It Works
 
-#### Markdown Integration
+**Task List Names:** The H1 heading (`# My List Name`) in each markdown file becomes the Google Tasks list name. Tasks are automatically synced to lists matching their H1 heading.
 
-- `:GtaskSync <list_id>` - Sync markdown tasks from current buffer to Google Tasks
+**Due Dates:** Add due dates to tasks using the format: `- [ ] Task title | YYYY-MM-DD`
 
-### Task-only Workflow
+**2-Way Sync:** `:GtaskSync` performs intelligent bidirectional synchronization:
 
-View and manage Google Tasks directly within Neovim:
+1. **Scans your markdown directory** (default: `~/gtask.nvim`, or configured in `setup()`) for all `.md` files recursively
+2. **Groups tasks by H1 heading** (list name)
+3. **For each list**:
+   - Finds or creates the list in Google Tasks
+   - Fetches existing tasks from that list
+   - Syncs in both directions:
+     - Tasks in markdown but not in Google → Created in Google Tasks
+     - Tasks in Google but not in markdown → Written to `[ListName].md`
+     - Tasks in both locations → Updated to match (markdown is source of truth)
 
-1. **Get your task lists:** `:GtaskGetLists`
-2. **View tasks:** `:GtaskView <list_id>`
-3. **Manage tasks:** Use the formatted view with hierarchical sorting by due date
+> Tasks are matched by title. If you rename a task in markdown, it will be treated as a new task.
 
-The task view displays:
+**Example Workflow (starting from tasks already present in Google Tasks):**
 
-- Tasks grouped by due date
-- Subtasks under their parent tasks
-- Completion status and descriptions
-- Clean markdown formatting
+```bash
+# 1. Authenticate once
+:GtaskAuth
 
-### Integrated Workflow
-
-Manage tasks directly in your markdown files:
-
-1. **Create tasks in markdown:**
-
-```markdown
-# My Project Notes
-
-- [ ] Main task with due date
-      Description for the main task
-  - [ ] Subtask one
-  - [x] Completed subtask
-- [ ] Another task
-      Additional notes about this task
+# 2. Run sync to pull tasks from Google
+:GtaskSync
 ```
 
-2. **Sync with Google Tasks:** `:GtaskSync <list_id>`
+After syncing:
 
-**Task Format:**
+- Tasks from each Google Tasks list will be written to separate files: `~/gtask.nvim/[ListName].md`
+- You can then:
+  - Review and organize these tasks
+  - Move them to your own markdown files
+  - Edit and re-sync to update Google Tasks
+  - Keep the files for continued syncing
 
-- `- [ ]` for incomplete tasks
-- `- [x]` for completed tasks
-- Indented lines become task descriptions
-- Nested tasks become subtasks
+**Example Workflow (starting from scratch with markdown):**
 
-### Features
+```bash
+# 1. Authenticate once
+:GtaskAuth
 
-- **Secure Authentication** - OAuth proxy service handles credentials
-- **Automatic Token Refresh** - Seamless re-authentication when needed
-- **Hierarchical Task Display** - Subtasks grouped under parents, sorted by due date
-- **Markdown Integration** - Convert markdown task lists to Google Tasks
-- **Offline Support** - View cached tasks when offline
-- **No Manual Setup** - No Google Cloud configuration required
+# 2. Create a markdown file in ~/gtask.nvim/ (or your configured directory)
+# File: ~/gtask.nvim/shopping.md
 
-### Security & Privacy
+# Shopping List
+- [ ] Buy milk | 2025-01-15
+- [ ] Get eggs
+    Remember to get organic eggs
 
-- **No credentials stored locally** - Uses secure OAuth proxy
-- **Tokens encrypted** - Stored securely in Neovim's data directory
-- **No data logging** - Proxy service doesn't store or log your tasks
-- **Standard OAuth flow** - Industry-standard authentication
+# 3. Sync anytime
+:GtaskSync
+```
+
+After syncing:
+
+- A "Shopping List" will be created (or found) in Google Tasks
+- Your tasks will be synced with due dates
+- Any tasks from Google Tasks will appear in `[ListName].md` files

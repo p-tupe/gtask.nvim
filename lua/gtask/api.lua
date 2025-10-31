@@ -6,8 +6,11 @@ local config = require("gtask.config")
 local store = require("gtask.store")
 local Job = require("plenary.job")
 
--- Get proxy backend URL from config
-local PROXY_BASE_URL = config.proxy.base_url
+--- Get proxy backend URL from config (dynamically to respect setup() changes)
+---@return string The proxy base URL
+local function get_proxy_url()
+	return config.proxy.base_url
+end
 
 --- Refresh OAuth access token using refresh token
 --- Called automatically when API returns 401 unauthorized
@@ -36,7 +39,7 @@ local function refresh_tokens(refresh_token, callback)
 			"-X", "POST",
 			"-H", "Content-Type: application/json",
 			"-d", request_body,
-			PROXY_BASE_URL .. "/auth/refresh"
+			get_proxy_url() .. "/auth/refresh"
 		},
 		on_exit = function(j, return_val)
 			vim.schedule(function()
@@ -275,6 +278,79 @@ function M.update_task(task_list_id, task_id, task_data, callback)
 		url = string.format("https://tasks.googleapis.com/tasks/v1/lists/%s/tasks/%s", task_list_id, task_id),
 		body = task_data,
 	}, callback)
+end
+
+--- Find a task list by name
+---@param list_name string The name of the task list to find
+---@param callback function Callback called with list object or nil if not found
+function M.find_list_by_name(list_name, callback)
+	M.get_task_lists(function(response, err)
+		if err then
+			callback(nil, err)
+			return
+		end
+
+		local lists = response.items or {}
+		for _, list in ipairs(lists) do
+			if list.title == list_name then
+				callback(list)
+				return
+			end
+		end
+
+		-- List not found
+		callback(nil)
+	end)
+end
+
+--- Create a new task list
+---@param list_name string The name of the new task list
+---@param callback function Callback called with created list or error
+function M.create_task_list(list_name, callback)
+	if not list_name or list_name == "" then
+		vim.notify("List name is required", vim.log.levels.ERROR)
+		if callback then
+			callback(nil, "List name is required")
+		end
+		return
+	end
+
+	request({
+		method = "POST",
+		url = "https://tasks.googleapis.com/tasks/v1/users/@me/lists",
+		body = { title = list_name },
+	}, callback)
+end
+
+--- Get or create a task list by name
+--- Finds an existing list by name, or creates it if it doesn't exist
+---@param list_name string The name of the task list
+---@param callback function Callback called with list object
+function M.get_or_create_list(list_name, callback)
+	if not list_name or list_name == "" then
+		vim.notify("List name is required", vim.log.levels.ERROR)
+		if callback then
+			callback(nil, "List name is required")
+		end
+		return
+	end
+
+	-- First, try to find existing list
+	M.find_list_by_name(list_name, function(list, err)
+		if err then
+			callback(nil, err)
+			return
+		end
+
+		if list then
+			-- List exists, return it
+			callback(list)
+		else
+			-- List doesn't exist, create it
+			vim.notify(string.format("Creating new task list: %s", list_name))
+			M.create_task_list(list_name, callback)
+		end
+	end)
 end
 
 return M

@@ -6,8 +6,11 @@ local config = require("gtask.config")
 local store = require("gtask.store")
 local Job = require("plenary.job")
 
--- Get proxy backend URL from config
-local PROXY_BASE_URL = config.proxy.base_url
+--- Get proxy backend URL from config (dynamically to respect setup() changes)
+---@return string The proxy base URL
+local function get_proxy_url()
+	return config.proxy.base_url
+end
 
 -- OAuth state storage for proxy backend
 local oauth_state = {}
@@ -40,7 +43,7 @@ local function poll_for_completion(state, callback)
 			command = "curl",
 			args = {
 				"-s",
-				PROXY_BASE_URL .. "/auth/poll/" .. state
+				get_proxy_url() .. "/auth/poll/" .. state
 			},
 			on_exit = function(j, return_val)
 				vim.schedule(function()
@@ -91,7 +94,7 @@ function M.get_authorization_url(callback)
 			"-X", "POST",
 			"-H", "Content-Type: application/json",
 			"-d", "{}",
-			PROXY_BASE_URL .. "/auth/start"
+			get_proxy_url() .. "/auth/start"
 		},
 		on_exit = function(j, return_val)
 			vim.schedule(function()
@@ -156,7 +159,7 @@ local function exchange_code_for_tokens(code, callback)
 			"-X", "POST",
 			"-H", "Content-Type: application/json",
 			"-d", request_body,
-			PROXY_BASE_URL .. "/auth/token"
+			get_proxy_url() .. "/auth/token"
 		},
 		on_exit = function(j, return_val)
 			vim.schedule(function()
@@ -333,16 +336,13 @@ local function start_local_server(callback)
 end
 
 --- Start the OAuth 2.0 authentication flow
---- Opens authorization URL and starts local server to receive callback
+--- Clears previous authentication and forces new authorization
 ---@param callback? function Optional callback called when authentication completes
 function M.authenticate(callback)
-	-- Check if already authenticated
+	-- Clear any existing tokens to force re-authentication
 	if store.has_tokens() then
-		vim.notify("Already authenticated. Use :GtaskClearAuth to re-authenticate.", vim.log.levels.INFO)
-		if callback then
-			callback(true)
-		end
-		return
+		vim.notify("Clearing previous authentication...")
+		store.clear_tokens()
 	end
 
 	-- Get authorization URL from proxy backend

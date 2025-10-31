@@ -1,9 +1,24 @@
 local M = {}
 
+---Extracts the H1 heading from markdown lines (used as task list name)
+---@param lines string[] Array of markdown lines
+---@return string|nil The H1 heading text or nil if not found
+function M.extract_list_name(lines)
+	for _, line in ipairs(lines) do
+		-- Match H1 heading: # Text
+		local heading = line:match("^#%s+(.+)$")
+		if heading then
+			return heading
+		end
+	end
+	return nil
+end
+
 ---@class Task
 ---@field title string The task title
 ---@field completed boolean Whether the task is completed
 ---@field description string|nil The task description (from following indented lines)
+---@field due_date string|nil The due date in RFC3339 format (parsed from markdown)
 ---@field line_number integer The line number where this task appears
 ---@field indent_level integer The indentation level (0 for top-level tasks)
 ---@field parent_index integer|nil Index of parent task if this is a subtask
@@ -39,7 +54,7 @@ end
 ---@return Task|nil, integer Task object and number of lines consumed
 function M.parse_single_task(lines, start_index)
 	local line = lines[start_index]
-	local indent, checkbox, title = M.parse_task_line(line)
+	local indent, checkbox, title, due_date = M.parse_task_line(line)
 
 	if not title then
 		return nil, 0
@@ -48,6 +63,7 @@ function M.parse_single_task(lines, start_index)
 	local task = {
 		title = title,
 		completed = checkbox == "x",
+		due_date = due_date,
 		line_number = start_index,
 		indent_level = indent,
 		description = nil,
@@ -67,7 +83,7 @@ function M.parse_single_task(lines, start_index)
 		end
 
 		-- Check if this is another task - if so, stop looking for description
-		local desc_indent, desc_checkbox, desc_title = M.parse_task_line(desc_line)
+		local desc_indent, desc_checkbox, desc_title, _ = M.parse_task_line(desc_line)
 		if desc_title then
 			break
 		end
@@ -95,21 +111,37 @@ function M.parse_single_task(lines, start_index)
 	return task, consumed_lines
 end
 
----Parses a task line to extract indentation, checkbox state, and title
+---Parses a task line to extract indentation, checkbox state, title, and due date
 ---@param line string The line to parse
----@return integer, string|nil, string|nil indent_level, checkbox_state, title
+---@return integer, string|nil, string|nil, string|nil indent_level, checkbox_state, title, due_date
 function M.parse_task_line(line)
-	-- Match pattern: optional whitespace, -, space, [checkbox], space, title
-	local indent_str, checkbox, title = line:match("^(%s*)%-%s*%[([%sx]?)%]%s*(.+)$")
+	-- Match pattern: optional whitespace, -, space, [checkbox], space, title [| due_date]
+	local indent_str, checkbox, content = line:match("^(%s*)%-%s*%[([%sx]?)%]%s*(.+)$")
 
+	if not content then
+		return 0, nil, nil, nil
+	end
+
+	-- Extract title and optional due date (format: "Title | YYYY-MM-DD")
+	local title, due_date_str = content:match("^(.-)%s*|%s*(%d%d%d%d%-%d%d%-%d%d)%s*$")
 	if not title then
-		return 0, nil, nil
+		-- No due date, entire content is title
+		title = content
+		due_date_str = nil
 	end
 
 	-- Calculate indentation level (assuming 2 spaces per level)
 	local indent_level = math.floor(#indent_str / 2)
 
-	return indent_level, checkbox, title
+	-- Convert due date to RFC3339 format if present (Google Tasks format)
+	local due_date = nil
+	if due_date_str then
+		-- Google Tasks expects RFC3339 format: "YYYY-MM-DDTHH:MM:SS.sssZ"
+		-- For a date-only task, use midnight UTC
+		due_date = due_date_str .. "T00:00:00.000Z"
+	end
+
+	return indent_level, checkbox, title, due_date
 end
 
 ---Gets the indentation level of a line
