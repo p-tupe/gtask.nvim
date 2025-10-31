@@ -2,7 +2,6 @@
 <div style="width:100%" align="center"> <img src="./logo.svg" alt="gtask.nvim Image"> </div>
 <h1 align="center">gtask.nvim</h1>
 <p align="center"><strong>Google Tasks in Neovim (Under Construction)</strong></p>
-<hr />
 <br />
 
 ## Motivation

@@ -34,7 +34,7 @@ type Server struct {
 type GoogleConfig struct {
 	ClientID     string `json:"client_id"`
 	ClientSecret string `json:"client_secret"`
-	RedirectURI  string `json:"-"`
+	RedirectURI  string `json:"redirect_uri,omitempty"`
 	Scope        string `json:"-"`
 }
 
@@ -59,7 +59,7 @@ type ErrorResponse struct {
 
 func NewServer() *Server {
 	config := GoogleConfig{
-		RedirectURI: "http://127.0.0.1:3000/auth/callback",
+		RedirectURI: "https://app.priteshtupe.com/gtask/auth/callback",
 		Scope:       "https://www.googleapis.com/auth/tasks",
 	}
 

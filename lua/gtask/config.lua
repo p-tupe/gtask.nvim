@@ -18,7 +18,7 @@ local defaults = {
 		--- Points to the deployed gtask auth proxy service
 		--- Can be overridden via setup() function
 		---@type string
-		base_url = "http://localhost:3000",
+		base_url = "https://app.priteshtupe.com/gtask",
 	},
 
 	--- Token storage configuration

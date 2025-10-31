@@ -3,5 +3,5 @@ services:
     build:
       context: .
     ports:
-      - 3000:3000
+      - 8086:3000
     restart: always
