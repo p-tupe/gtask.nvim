@@ -1,12 +1,9 @@
-<center>
-
-# gtask.nvim
-
-> Google Tasks in Neovim (Under Construction)
-
-![gtask.nvim logo](./logo.svg)
-
-</center>
+<br />
+<div style="width:100%" align="center"> <img src="./logo.svg" alt="gtask.nvim Image"> </div>
+<h1 align="center">gtask.nvim</h1>
+<p align="center"><strong>Google Tasks in Neovim (Under Construction)</strong></p>
+<hr />
+<br />
 
 ## Motivation
 
@@ -21,50 +18,33 @@ First and foremost, my aim to have tasks slot into my current workflow. By that,
 For e.g., if I were to start a new note for "travel plan 3025" I would like to add tasks right inside the rest of the plan.
 
 ```markdown
-# Travel Plan 3025 `<-- This is a tasks list`
+# Travel Plan 3025 <-- This is a tasks list
 
-## Let's go to Mars! `<-- List description (not stored in gtasks!)`
+## Let's go to Mars!
 
-... more notes on space regulations
+... more notes on space regulations <-- These notes are NOT saved on Google
 
-- [ ] Check visa requirements | 2025-10-31 `<-- This is a task with "title" | "due date"`
+- [ ] Check visa requirements | 2025-10-31 <-- This is a task with "title" | "due date"
 
-  Notes on visa requirements when checking `<-- This is the task's description`
-  - [ ] Contact Martian friend who knows stuff `<-- This becomes a sub-task`
+  Notes on visa requirements when checking <-- This is the task's description
+  - [ ] Contact Martian friend who knows stuff <-- This becomes a sub-task
 
-    Friend's contact number: xxx-yyy-zz `<-- This is sub-task's description (note the spacing)`
+    Friend's contact number: xxx-yyy-zz <-- This is sub-task's description (note the spacing)
 ```
 
 One of the major issues I face is that the "description" field is extremely cumbersome to use. Unable to add any formatting, and the way it is shown is downright horrendous. In here though, it's just another markdown content block. Neat, eh? The next issue is the subtask management in official apps - they are treated as second class citizens. Here they are not.
 
 ## Installation
 
-Using your favorite plugin manager:
-
-**lazy.nvim:**
+**Example lazy.nvim:**
 
 ```lua
 {
-  "your-username/gtask.nvim",
+  "p-tupe/gtask.nvim",
   dependencies = { "nvim-lua/plenary.nvim" },
-  config = function()
-    require('gtask').setup()
-  end
-}
-```
-
-**packer.nvim:**
-
-```lua
-use {
-  "your-username/gtask.nvim",
-  requires = { "nvim-lua/plenary.nvim" },
-  config = function()
-    require('gtask').setup()
-  end
 }
 
-See [#Backend Setup]() for hosting your own backend auth client.
+require("gtask").setup()
 ```
 
 ## Configuration
@@ -72,12 +52,12 @@ See [#Backend Setup]() for hosting your own backend auth client.
 The plugin works out of the box with default settings, but you can customize it:
 
 ```lua
-require('gtask').setup({
+require("gtask").setup({
   -- Absolute path to markdown directory
   markdown_dir = "~/gtask.nvim",
 
   -- Custom OAuth proxy backend URL
-  proxy_url = "http://localhost:3000",
+  proxy_url = "https://gtask.priteshtupe.com",
 
   -- Custom token storage filename
   token_file = "gtask_tokens.json",
