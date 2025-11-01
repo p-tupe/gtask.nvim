@@ -26,10 +26,10 @@ local function poll_for_completion(state, callback)
 
 	local poll_count = 0
 	local max_polls = 60 -- Poll for up to 5 minutes (60 * 5 seconds)
-	
+
 	local function do_poll()
 		poll_count = poll_count + 1
-		
+
 		if poll_count > max_polls then
 			vim.notify("Authentication timed out. Please try again.", vim.log.levels.ERROR)
 			oauth_state.state = nil
@@ -43,14 +43,14 @@ local function poll_for_completion(state, callback)
 			command = "curl",
 			args = {
 				"-s",
-				get_proxy_url() .. "/auth/poll/" .. state
+				get_proxy_url() .. "/auth/poll/" .. state,
 			},
 			on_exit = function(j, return_val)
 				vim.schedule(function()
 					if return_val == 0 then
 						local response = table.concat(j:result())
 						local success, data = pcall(vim.fn.json_decode, response)
-						
+
 						if success and data then
 							if data.completed then
 								-- Authentication completed!
@@ -77,7 +77,7 @@ local function poll_for_completion(state, callback)
 			end,
 		}):start()
 	end
-	
+
 	-- Start polling
 	do_poll()
 end
@@ -91,22 +91,25 @@ function M.get_authorization_url(callback)
 		command = "curl",
 		args = {
 			"-s",
-			"-X", "POST",
-			"-H", "Content-Type: application/json",
-			"-d", "{}",
-			get_proxy_url() .. "/auth/start"
+			"-X",
+			"POST",
+			"-H",
+			"Content-Type: application/json",
+			"-d",
+			"{}",
+			get_proxy_url() .. "/auth/start",
 		},
 		on_exit = function(j, return_val)
 			vim.schedule(function()
 				if return_val == 0 then
 					local response = table.concat(j:result())
 					local success, data = pcall(vim.fn.json_decode, response)
-					
+
 					if success and data and data.authUrl and data.state then
 						-- Store state for token exchange
 						oauth_state.state = data.state
 						vim.notify("DEBUG: Generated auth URL via proxy", vim.log.levels.DEBUG)
-						
+
 						if callback then
 							callback(data.authUrl, nil)
 						end
@@ -128,7 +131,6 @@ function M.get_authorization_url(callback)
 		end,
 	}):start()
 end
-
 
 --- Start the OAuth 2.0 authentication flow
 --- Clears previous authentication and forces new authorization
@@ -160,9 +162,9 @@ function M.authenticate(callback)
 
 		-- Also echo the URL to command line to ensure it's visible
 		vim.schedule(function()
-			vim.cmd('echohl WarningMsg')
+			vim.cmd("echohl WarningMsg")
 			vim.cmd('echo "Auth URL: ' .. auth_url:gsub('"', '\\"') .. '"')
-			vim.cmd('echohl None')
+			vim.cmd("echohl None")
 		end)
 
 		-- Start polling for completion

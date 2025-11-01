@@ -31,7 +31,6 @@ function M.parse_tasks(lines)
 	local i = 1
 
 	while i <= #lines do
-		local line = lines[i]
 		local task, consumed_lines = M.parse_single_task(lines, i)
 
 		if task then
@@ -83,7 +82,7 @@ function M.parse_single_task(lines, start_index)
 		local desc_line = lines[j]
 
 		-- Check if this is another task - if so, stop looking for description
-		local desc_indent, desc_checkbox, desc_title, _ = M.parse_task_line(desc_line)
+		local _, _, desc_title, _ = M.parse_task_line(desc_line)
 		if desc_title then
 			break
 		end
