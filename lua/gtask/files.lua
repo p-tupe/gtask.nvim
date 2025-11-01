@@ -10,7 +10,7 @@ function M.get_markdown_dir()
 	return config.markdown.dir
 end
 
---- Check if markdown directory is configured and exists
+--- Check if markdown directory is configured and exists, creating it if necessary
 ---@return boolean success True if valid, false otherwise
 ---@return string|nil error_message Error message if validation failed
 function M.validate_markdown_dir()
@@ -23,11 +23,18 @@ function M.validate_markdown_dir()
 	-- Check if directory exists
 	local stat = vim.loop.fs_stat(dir)
 	if not stat then
-		return false, "Markdown directory does not exist: " .. dir
+		-- Directory doesn't exist, try to create it
+		local success, err = pcall(vim.fn.mkdir, dir, "p")
+		if not success then
+			return false, "Failed to create markdown directory: " .. dir .. " (" .. tostring(err) .. ")"
+		end
+
+		vim.notify("Created markdown directory: " .. dir, vim.log.levels.INFO)
+		return true, nil
 	end
 
 	if stat.type ~= "directory" then
-		return false, "Path is not a directory: " .. dir
+		return false, "Path exists but is not a directory: " .. dir
 	end
 
 	return true, nil

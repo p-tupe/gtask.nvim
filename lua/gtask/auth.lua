@@ -147,17 +147,26 @@ function M.authenticate(callback)
 			return
 		end
 
-		vim.notify("Please visit the following URL in your browser to authorize the application:")
-		print(auth_url)
-
 		-- Copy to clipboard if available
 		local clipboard_success = pcall(vim.fn.setreg, "+", auth_url)
+
+		-- Display the URL prominently
+		vim.notify("Please visit this URL to authorize:", vim.log.levels.INFO)
+		vim.notify(auth_url, vim.log.levels.WARN)
+
 		if clipboard_success then
-			vim.notify("(URL has been copied to your clipboard)")
+			vim.notify("(URL copied to clipboard)", vim.log.levels.INFO)
 		end
 
+		-- Also echo the URL to command line to ensure it's visible
+		vim.schedule(function()
+			vim.cmd('echohl WarningMsg')
+			vim.cmd('echo "Auth URL: ' .. auth_url:gsub('"', '\\"') .. '"')
+			vim.cmd('echohl None')
+		end)
+
 		-- Start polling for completion
-		vim.notify("Waiting for authorization... (check your browser)")
+		vim.notify("Waiting for authorization... (check your browser)", vim.log.levels.INFO)
 		poll_for_completion(oauth_state.state, callback)
 	end)
 end

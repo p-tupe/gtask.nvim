@@ -4,6 +4,39 @@ local api = require("gtask.api")
 local parser = require("gtask.parser")
 local files = require("gtask.files")
 
+---Normalize a list name to a safe filename
+---@param list_name string The list name to normalize
+---@return string Normalized filename (without .md extension)
+local function normalize_filename(list_name)
+	if not list_name or list_name == "" then
+		return "untitled"
+	end
+
+	-- Convert to lowercase
+	local normalized = list_name:lower()
+
+	-- Remove or replace problematic characters
+	-- Replace spaces and common separators with hyphens
+	normalized = normalized:gsub("[%s_]+", "-")
+
+	-- Remove characters that are problematic in filenames
+	normalized = normalized:gsub('[/:*?"<>|\\]', "")
+
+	-- Remove leading/trailing hyphens
+	normalized = normalized:gsub("^%-+", "")
+	normalized = normalized:gsub("%-+$", "")
+
+	-- Collapse multiple hyphens
+	normalized = normalized:gsub("%-+", "-")
+
+	-- If empty after normalization, use fallback
+	if normalized == "" then
+		return "untitled"
+	end
+
+	return normalized
+end
+
 ---Checks if a Google task needs to be updated based on markdown task
 ---@param mdtask Task Markdown task
 ---@param gtask table Google task
@@ -20,6 +53,13 @@ function M.task_needs_update(mdtask, gtask)
 	local md_desc = mdtask.description or ""
 	local g_desc = gtask.notes or ""
 	if md_desc ~= g_desc then
+		return true
+	end
+
+	-- Check due date
+	local md_due = mdtask.due_date or ""
+	local g_due = gtask.due or ""
+	if md_due ~= g_due then
 		return true
 	end
 
@@ -209,7 +249,8 @@ end
 ---@param list_name string Name of the task list
 ---@param callback function Callback when complete
 function M.write_google_tasks_to_markdown(tasks, markdown_dir, list_name, callback)
-	local filename = markdown_dir .. "/" .. list_name .. ".md"
+	local normalized_name = normalize_filename(list_name)
+	local filename = markdown_dir .. "/" .. normalized_name .. ".md"
 
 	-- Read existing file if it exists
 	local existing_lines = {}
@@ -235,7 +276,22 @@ function M.write_google_tasks_to_markdown(tasks, markdown_dir, list_name, callba
 		-- Skip if already exists in file
 		if not existing_by_title[gtask.title] then
 			local checkbox = gtask.status == "completed" and "x" or " "
-			table.insert(new_task_lines, string.format("- [%s] %s", checkbox, gtask.title))
+			local task_line = string.format("- [%s] %s", checkbox, gtask.title)
+
+			-- Add due date if present (convert from RFC3339 to YYYY-MM-DD HH:MM or YYYY-MM-DD)
+			if gtask.due and gtask.due ~= "" then
+				-- RFC3339 format: "2025-01-15T14:30:00.000Z"
+				local date_part, time_part = gtask.due:match("(%d%d%d%d%-%d%d%-%d%d)T(%d%d:%d%d)")
+				if date_part then
+					task_line = task_line .. " | " .. date_part
+					-- Only add time if it's not midnight (00:00)
+					if time_part and time_part ~= "00:00" then
+						task_line = task_line .. " " .. time_part
+					end
+				end
+			end
+
+			table.insert(new_task_lines, task_line)
 			new_task_count = new_task_count + 1
 
 			-- Add description/notes if present

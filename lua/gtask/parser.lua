@@ -70,17 +70,14 @@ function M.parse_single_task(lines, start_index)
 		parent_index = nil,
 	}
 
-	-- Look for description lines (indented lines that are not tasks)
+	-- Look for description lines (any non-task, non-empty lines following the task)
+	-- Allow one empty line between task and description
 	local consumed_lines = 1
 	local description_parts = {}
+	local skipped_initial_empty = false
 
 	for j = start_index + 1, #lines do
 		local desc_line = lines[j]
-
-		-- Skip empty lines
-		if desc_line:match("^%s*$") then
-			break
-		end
 
 		-- Check if this is another task - if so, stop looking for description
 		local desc_indent, desc_checkbox, desc_title, _ = M.parse_task_line(desc_line)
@@ -88,19 +85,23 @@ function M.parse_single_task(lines, start_index)
 			break
 		end
 
-		-- Check if this is a description line (indented more than the task)
-		local line_indent = M.get_line_indent(desc_line)
-		if line_indent > indent then
-			-- Extract the content after the indentation
-			local content = desc_line:match("^%s*(.+)$")
-			if content then
-				table.insert(description_parts, content)
+		-- Handle empty lines
+		if desc_line:match("^%s*$") then
+			-- Allow one empty line before description starts
+			if #description_parts == 0 and not skipped_initial_empty then
+				skipped_initial_empty = true
 				consumed_lines = consumed_lines + 1
 			else
+				-- Empty line after description has started - stop here
 				break
 			end
 		else
-			break
+			-- Any other line is part of the description (strip leading/trailing whitespace)
+			local content = desc_line:match("^%s*(.+)%s*$")
+			if content then
+				table.insert(description_parts, content)
+				consumed_lines = consumed_lines + 1
+			end
 		end
 	end
 
@@ -122,12 +123,17 @@ function M.parse_task_line(line)
 		return 0, nil, nil, nil
 	end
 
-	-- Extract title and optional due date (format: "Title | YYYY-MM-DD")
-	local title, due_date_str = content:match("^(.-)%s*|%s*(%d%d%d%d%-%d%d%-%d%d)%s*$")
+	-- Extract title and optional due date (format: "Title | YYYY-MM-DD" or "Title | YYYY-MM-DD HH:MM")
+	local title, due_date_str, time_str = content:match("^(.-)%s*|%s*(%d%d%d%d%-%d%d%-%d%d)%s*(%d%d:%d%d)%s*$")
+	if not title then
+		-- Try without time
+		title, due_date_str = content:match("^(.-)%s*|%s*(%d%d%d%d%-%d%d%-%d%d)%s*$")
+	end
 	if not title then
 		-- No due date, entire content is title
 		title = content
 		due_date_str = nil
+		time_str = nil
 	end
 
 	-- Calculate indentation level (assuming 2 spaces per level)
@@ -137,19 +143,16 @@ function M.parse_task_line(line)
 	local due_date = nil
 	if due_date_str then
 		-- Google Tasks expects RFC3339 format: "YYYY-MM-DDTHH:MM:SS.sssZ"
-		-- For a date-only task, use midnight UTC
-		due_date = due_date_str .. "T00:00:00.000Z"
+		if time_str then
+			-- With time: use provided time in UTC
+			due_date = due_date_str .. "T" .. time_str .. ":00.000Z"
+		else
+			-- Date-only: use midnight UTC
+			due_date = due_date_str .. "T00:00:00.000Z"
+		end
 	end
 
 	return indent_level, checkbox, title, due_date
-end
-
----Gets the indentation level of a line
----@param line string The line to analyze
----@return integer The indentation level
-function M.get_line_indent(line)
-	local indent_str = line:match("^(%s*)")
-	return math.floor(#indent_str / 2)
 end
 
 ---Builds parent-child relationships for tasks based on indentation

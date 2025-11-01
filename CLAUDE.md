@@ -24,19 +24,23 @@ Tasks use standard markdown checkbox syntax with specific indentation rules:
 # Task List Name  <-- H1 heading becomes Google Tasks list name
 
 - [ ] Task title | 2025-01-15  <-- Task with due date (YYYY-MM-DD format)
-    Task description (indented 4 spaces from line start)
-    More description lines
+- [ ] Another task | 2025-01-15 14:30  <-- Task with due date and time (YYYY-MM-DD HH:MM format)
+
+Task description (any indentation works, one blank line allowed before description)
+More description lines
   - [ ] Subtask (indented 2 spaces from line start)
-      Subtask description (indented 6 spaces from line start)
+
+Subtask description (any indentation works, one blank line allowed before description)
 ```
 
-**Format rules** (implemented in `parser.lua`):
-- **List name**: H1 heading (`# Name`) used to find/create Google Tasks list
-- **Task hierarchy**: 2 spaces per indentation level
-- **Task descriptions**: Task indentation + 2 spaces (always 2 more than the task itself)
+**Format rules** (implemented in `parser.lua` and `sync.lua`):
+- **List name**: H1 heading (`# Name`) used to find/create Google Tasks list. Filenames are auto-normalized (lowercase, spaces→hyphens) to prevent duplicates.
+- **Task hierarchy**: Subtasks must be indented at least 2 spaces more than their parent (can be 2, 4, 6+ spaces)
+- **Task descriptions**: Any non-empty, non-task line following a task becomes its description (no strict indentation required). One blank line may separate a task from its description.
 - **Checkbox format**: `- [ ]` for incomplete, `- [x]` for completed
-- **Due dates**: Optional `| YYYY-MM-DD` after task title, converted to RFC3339 format
-- **Indentation calculation**: `math.floor(#indent_str / 2)` determines nesting level
+- **Due dates**: Optional `| YYYY-MM-DD` or `| YYYY-MM-DD HH:MM` after task title, converted to RFC3339 format. Time is optional; if omitted, defaults to midnight UTC. When syncing from Google, time is only shown if not midnight.
+- **Indentation calculation**: `math.floor(#indent_str / 2)` determines nesting level. The hierarchy builder uses a stack to find the nearest less-indented task as the parent.
+- **Filename normalization**: List names are normalized to safe filenames (e.g., "My Shopping List" → `my-shopping-list.md`). The H1 heading preserves the original name.
 
 ## Key Architecture Components
 
@@ -47,9 +51,8 @@ Tasks use standard markdown checkbox syntax with specific indentation rules:
 - `lua/gtask/auth.lua`: OAuth 2.0 authentication with polling-based flow
 - `lua/gtask/api.lua`: Google Tasks API client with automatic token refresh, list management (find/create by name)
 - `lua/gtask/store.lua`: Token persistence to `vim.fn.stdpath("data")/gtask_tokens.json`
-- `lua/gtask/view.lua`: Task rendering with hierarchical sorting by due date
 - `lua/gtask/parser.lua`: Markdown task parser (handles hierarchy, descriptions, due dates, and H1 extraction for list names)
-- `lua/gtask/sync.lua`: 2-way sync between markdown and Google Tasks (multiple lists, no list ID needed)
+- `lua/gtask/sync.lua`: 2-way sync between markdown and Google Tasks (multiple lists, filename normalization to prevent duplicates)
 - `lua/gtask/files.lua`: Markdown file discovery, directory scanning (recursive), and list name extraction
 - `plugin/gtask.lua`: Neovim command definitions - only 2 commands: `:GtaskAuth` and `:GtaskSync`
 
@@ -129,11 +132,12 @@ The `files.lua` module handles markdown file operations:
    - Compare markdown tasks vs Google tasks by title
    - Plan operations:
      - Tasks only in markdown → create in Google Tasks
-     - Tasks only in Google → write to `[ListName].md`
+     - Tasks only in Google → write to `[normalized-filename].md`
      - Tasks in both with differences → update Google (markdown is source of truth)
    - Execute operations in parallel (Google API calls + markdown file write)
 
 **Key functions**:
+- `normalize_filename()` - Converts list names to safe, consistent filenames (lowercase, spaces→hyphens, removes special chars)
 - `sync_directory_with_google()` - Entry point, no parameters needed
 - `sync_multiple_lists()` - Manages parallel syncing of multiple lists
 - `sync_single_list()` - Syncs one list (get/create + fetch + sync)
@@ -141,6 +145,7 @@ The `files.lua` module handles markdown file operations:
 - `execute_twoway_sync()` - Executes planned operations with parallel API calls
 - `create_google_task()` - Creates task with title, description, status, and **due date**
 - `update_google_task()` - Updates task including **due date** if present
+- `write_google_tasks_to_markdown()` - Writes Google tasks to normalized filename, preserving original list name in H1
 
 **API additions**:
 - `api.find_list_by_name()` - Searches for existing list by title
@@ -255,19 +260,13 @@ lua test_pkce:*
 - **Impact**: Can't have multiple task lists in a single markdown file
 - **Workaround**: Use separate markdown files for different task lists
 
-### 8. Strict Indentation Requirements
-- **Task descriptions**: Must be indented exactly 2 spaces more than their task
-- **Subtasks**: Must be indented exactly 2 spaces from their parent (assumes 2 spaces per indent level)
-- **Impact**: Incorrect indentation may cause parsing issues or tasks to be skipped
-- **Note**: Based on `indent_level = math.floor(#indent_str / 2)` calculation in parser.lua:134
+### 8. Subtask Indentation Requirements
+- **Subtasks**: Must be indented at least 2 spaces more than their parent (2, 4, 6+ spaces all work)
+- **Task descriptions**: No strict indentation required - any non-task line following a task becomes its description
+- **Impact**: Subtasks with less than 2 spaces of additional indentation won't be recognized as children
+- **Note**: Based on `indent_level = math.floor(#indent_str / 2)` calculation and stack-based hierarchy building
 
-### 9. GtaskAuth URL is hidden in neovim message buffer
-
-### 10. App isn't verified on Google
-
-### 11. gtask.nvim directory must be manually created
-
-### 12. Sync doesn't actually work, rework it
+### 9. App isn't verified on Google
 
 ## Implementing Subtask Support
 
