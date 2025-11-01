@@ -82,14 +82,23 @@ require("gtask").setup({
 - **`:GtaskAuth`** - Authenticate with Google (one-time setup)
 - **`:GtaskSync`** - Sync markdown files with Google Tasks
 
-## Known Bugs
+## Known Issues & Limitations
 
-- Renaming tasks creates new tasks
-- No conflict resolution for simultaneous edits (markdown is considered source of truth)
-- Subtasks can be a bit wonky
+- **No conflict resolution**: Simultaneous edits are not detected. Markdown is always considered source of truth during sync.
+- **Manual sync only**: No automatic background sync. You must run `:GtaskSync` manually. Or use an autocommand on entering directory.
+- **Task matching**: Uses position-based tracking with some recovery heuristics, but some weird issues like duplicates or new tasks could crop up in edge cases.
 - Please open an issue if you find more... :)
 
 ## Wiki
+
+### Testing
+
+```bash
+# To install dependencies: make install-deps
+make test
+```
+
+See [tests/README.md](tests/README.md) for detailed testing documentation.
 
 ### Configuration Options
 

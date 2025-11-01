@@ -3,6 +3,64 @@ local M = {}
 local api = require("gtask.api")
 local parser = require("gtask.parser")
 local files = require("gtask.files")
+local mapping = require("gtask.mapping")
+
+---Calculate simple string similarity (0.0 to 1.0)
+---@param str1 string First string
+---@param str2 string Second string
+---@return number Similarity ratio (1.0 = exact match, 0.0 = completely different)
+local function calculate_similarity(str1, str2)
+	if str1 == str2 then
+		return 1.0
+	end
+
+	-- Simple approach: check if one contains the other
+	local lower1 = str1:lower()
+	local lower2 = str2:lower()
+
+	if lower1:find(lower2, 1, true) or lower2:find(lower1, 1, true) then
+		return 0.8
+	end
+
+	-- Check first/last words match
+	local words1 = {}
+	for word in lower1:gmatch("%S+") do
+		table.insert(words1, word)
+	end
+	local words2 = {}
+	for word in lower2:gmatch("%S+") do
+		table.insert(words2, word)
+	end
+
+	if #words1 > 0 and #words2 > 0 then
+		if words1[1] == words2[1] or words1[#words1] == words2[#words2] then
+			return 0.7
+		end
+	end
+
+	return 0.0
+end
+
+---Check if markdown task is similar enough to Google task
+---@param mdtask table Markdown task
+---@param gtask table Google task
+---@return boolean True if tasks appear to be the same
+local function tasks_are_similar(mdtask, gtask)
+	-- Title similarity check
+	local title_sim = calculate_similarity(mdtask.title, gtask.title)
+	if title_sim > 0.75 then
+		return true
+	end
+
+	-- If completion status matches, more likely to be the same task
+	local md_completed = mdtask.completed
+	local g_completed = (gtask.status == "completed")
+	if md_completed == g_completed and title_sim > 0.6 then
+		return true
+	end
+
+	return false
+end
 
 ---Normalize a list name to a safe filename
 ---@param list_name string The list name to normalize
@@ -66,11 +124,12 @@ function M.task_needs_update(mdtask, gtask)
 	return false
 end
 
----Creates a new Google task from a markdown task
+---Creates a new Google task from a markdown task with optional parent
 ---@param mdtask Task Markdown task to create
 ---@param task_list_id string Google Tasks list ID
----@param callback function Callback when operation completes
-function M.create_google_task(mdtask, task_list_id, callback)
+---@param parent_id string|nil Parent task ID (nil for top-level)
+---@param callback function Callback when operation completes (success, err_msg, task_id, task_index)
+function M.create_google_task(mdtask, task_list_id, parent_id, callback)
 	local google_task = {
 		title = mdtask.title,
 		status = mdtask.completed and "completed" or "needsAction",
@@ -84,14 +143,13 @@ function M.create_google_task(mdtask, task_list_id, callback)
 		google_task.due = mdtask.due_date
 	end
 
-	-- TODO: Handle parent-child relationships
-	-- For now, create all tasks as top-level
-
-	api.create_task(task_list_id, google_task, function(response, err)
+	-- Use create_task_with_parent which handles both top-level and subtasks
+	api.create_task_with_parent(task_list_id, google_task, parent_id, nil, function(response, err)
 		if err then
-			callback(false, "Failed to create task: " .. mdtask.title)
+			callback(false, "Failed to create task: " .. mdtask.title, nil, nil)
 		else
-			callback(true)
+			-- Return success, no error, the new task ID, and the task's line_number (as index)
+			callback(true, nil, response.id, mdtask.line_number)
 		end
 	end)
 end
@@ -124,7 +182,7 @@ function M.update_google_task(mdtask, gtask, task_list_id, callback)
 	end)
 end
 
----Performs 2-way sync between markdown and Google Tasks
+---Performs 2-way sync between markdown and Google Tasks (position-based with recovery)
 ---@param sync_state table State containing tasks and configuration
 ---@param callback function Callback when sync is complete
 function M.perform_twoway_sync(sync_state, callback)
@@ -134,62 +192,202 @@ function M.perform_twoway_sync(sync_state, callback)
 	local markdown_dir = sync_state.markdown_dir
 	local list_name = sync_state.list_name
 
-	-- Index tasks by title for comparison
-	local md_by_title = {}
-	for _, task in ipairs(markdown_tasks) do
-		md_by_title[task.title] = task
+	-- Load mapping data
+	local map = mapping.load()
+
+	-- Index Google tasks by ID for quick lookup
+	local google_by_id = {}
+	for _, gtask in ipairs(google_tasks) do
+		google_by_id[gtask.id] = gtask
 	end
 
-	local google_by_title = {}
-	for _, task in ipairs(google_tasks) do
-		google_by_title[task.title] = task
+	-- Build task keys and perform tiered matching
+	local md_task_keys = {}
+	local all_md_tasks_with_keys = {}
+	local match_stats = { exact = 0, nearby = 0, context = 0, new = 0 }
+
+	for i, mdtask in ipairs(markdown_tasks) do
+		-- Get parent information
+		local parent_title = nil
+		local parent_line_number = nil
+		if mdtask.parent_index and markdown_tasks[mdtask.parent_index] then
+			parent_title = markdown_tasks[mdtask.parent_index].title
+			parent_line_number = markdown_tasks[mdtask.parent_index].line_number
+		end
+
+		-- Generate position-based key
+		local file_path = mdtask.source_file_path or ""
+		local task_key = mapping.generate_task_key(list_name, file_path, mdtask.line_number, parent_line_number)
+		local context_sig = mapping.generate_context_signature(list_name, mdtask.title, parent_title)
+
+		-- Tier 1: Try exact position match
+		local google_id = mapping.get_google_id(map, task_key)
+		local match_type = nil
+		local matched_gtask = nil
+
+		if google_id and google_by_id[google_id] then
+			-- Exact match found
+			matched_gtask = google_by_id[google_id]
+			match_type = "exact"
+			match_stats.exact = match_stats.exact + 1
+		else
+			-- Tier 2: Try nearby position match
+			local nearby_key, nearby_data, offset = mapping.find_nearby(map, list_name, file_path, mdtask.line_number, parent_line_number)
+			if nearby_data and google_by_id[nearby_data.google_id] then
+				local nearby_gtask = google_by_id[nearby_data.google_id]
+				-- Verify similarity before accepting
+				if tasks_are_similar(mdtask, nearby_gtask) then
+					google_id = nearby_data.google_id
+					matched_gtask = nearby_gtask
+					match_type = "nearby"
+					match_stats.nearby = match_stats.nearby + 1
+
+					-- Update mapping with new position
+					mapping.update_task_position(map, nearby_key, task_key, mdtask.line_number)
+					vim.notify(string.format("Recovered moved task: '%s' (moved %d lines)", mdtask.title, offset), vim.log.levels.INFO)
+				end
+			end
+
+			-- Tier 3: Try context-based match
+			if not google_id then
+				local context_key, context_data = mapping.find_by_context(map, context_sig)
+				if context_data and google_by_id[context_data.google_id] then
+					local context_gtask = google_by_id[context_data.google_id]
+					-- Verify similarity
+					if tasks_are_similar(mdtask, context_gtask) then
+						google_id = context_data.google_id
+						matched_gtask = context_gtask
+						match_type = "context"
+						match_stats.context = match_stats.context + 1
+
+						-- Update mapping with new position
+						mapping.update_task_position(map, context_key, task_key, mdtask.line_number)
+						vim.notify(string.format("Recovered reorganized task: '%s'", mdtask.title), vim.log.levels.INFO)
+					end
+				end
+			end
+		end
+
+		-- If no match found, it's a new task
+		if not google_id then
+			match_type = "new"
+			match_stats.new = match_stats.new + 1
+		end
+
+		table.insert(md_task_keys, task_key)
+		table.insert(all_md_tasks_with_keys, {
+			task = mdtask,
+			key = task_key,
+			context_sig = context_sig,
+			parent_title = parent_title,
+			parent_line_number = parent_line_number,
+			google_id = google_id,
+			matched_gtask = matched_gtask,
+			match_type = match_type,
+		})
 	end
 
+	-- Build operations based on matching results
 	local operations = {
-		to_google = {},  -- Tasks to create/update in Google
-		to_markdown = {}, -- Tasks to create in markdown
+		to_google = {},
+		to_markdown = {},
 	}
+	local seen_google_ids = {}
 
-	-- Find tasks only in markdown or needing update in Google
-	for _, mdtask in ipairs(markdown_tasks) do
-		local gtask = google_by_title[mdtask.title]
-		if not gtask then
-			-- Task only in markdown -> create in Google
-			table.insert(operations.to_google, { type = "create", markdown_task = mdtask })
-		elseif M.task_needs_update(mdtask, gtask) then
-			-- Task exists but needs update in Google
-			table.insert(operations.to_google, { type = "update", markdown_task = mdtask, google_task = gtask })
+	for _, item in ipairs(all_md_tasks_with_keys) do
+		-- Determine parent_key if this is a subtask
+		local parent_key = nil
+		if item.task.parent_index and all_md_tasks_with_keys[item.task.parent_index] then
+			parent_key = all_md_tasks_with_keys[item.task.parent_index].key
+		end
+
+		if item.google_id then
+			seen_google_ids[item.google_id] = true
+
+			if item.matched_gtask then
+				-- Task exists in both, check if update needed
+				if M.task_needs_update(item.task, item.matched_gtask) then
+					table.insert(operations.to_google, {
+						type = "update",
+						markdown_task = item.task,
+						google_task = item.matched_gtask,
+						task_key = item.key,
+						context_sig = item.context_sig,
+						parent_title = item.parent_title,
+						parent_line_number = item.parent_line_number,
+						parent_key = parent_key,
+					})
+				end
+			else
+				-- Task was deleted in Google
+				vim.notify(string.format("Task '%s' was deleted in Google Tasks", item.task.title), vim.log.levels.INFO)
+			end
+		else
+			-- No mapping - new task
+			table.insert(operations.to_google, {
+				type = "create",
+				markdown_task = item.task,
+				task_key = item.key,
+				context_sig = item.context_sig,
+				parent_title = item.parent_title,
+				parent_line_number = item.parent_line_number,
+				parent_key = parent_key,
+			})
 		end
 	end
 
-	-- Find tasks only in Google (need to be added to markdown)
+	-- Find Google tasks not in markdown
 	for _, gtask in ipairs(google_tasks) do
-		if not md_by_title[gtask.title] then
-			-- Task only in Google -> create in markdown
+		if not seen_google_ids[gtask.id] then
 			table.insert(operations.to_markdown, gtask)
 		end
 	end
 
-	-- Report sync plan
+	-- Report sync plan with match statistics
 	vim.notify(string.format(
-		"Sync plan: %d to Google, %d to markdown",
+		"Sync plan: %d to Google (%d new, %d updates), %d to markdown | Matches: %d exact, %d nearby, %d context, %d new",
 		#operations.to_google,
-		#operations.to_markdown
+		#vim.tbl_filter(function(op) return op.type == "create" end, operations.to_google),
+		#vim.tbl_filter(function(op) return op.type == "update" end, operations.to_google),
+		#operations.to_markdown,
+		match_stats.exact,
+		match_stats.nearby,
+		match_stats.context,
+		match_stats.new
 	))
 
-	-- Execute sync operations
-	M.execute_twoway_sync(operations, task_list_id, markdown_dir, list_name, callback)
+	-- Execute sync operations with mapping
+	M.execute_twoway_sync(operations, task_list_id, markdown_dir, list_name, map, md_task_keys, callback)
 end
 
----Executes 2-way sync operations
+---Executes 2-way sync operations with two-pass creation for parent-child relationships
 ---@param operations table Operations to perform
 ---@param task_list_id string Google Tasks list ID
 ---@param markdown_dir string Markdown directory path
 ---@param list_name string Name of the task list
+---@param map table Mapping data
+---@param md_task_keys table Array of current markdown task keys
 ---@param callback function Callback when complete
-function M.execute_twoway_sync(operations, task_list_id, markdown_dir, list_name, callback)
-	-- Count total operations: one per Google operation + one for markdown write (if any)
-	local total_ops = #operations.to_google
+function M.execute_twoway_sync(operations, task_list_id, markdown_dir, list_name, map, md_task_keys, callback)
+	-- Separate creates into updates, top-level creates, and subtask creates
+	local updates = {}
+	local creates_toplevel = {}
+	local creates_subtasks = {}
+
+	for _, op in ipairs(operations.to_google) do
+		if op.type == "update" then
+			table.insert(updates, op)
+		elseif op.type == "create" then
+			if op.markdown_task.parent_index then
+				table.insert(creates_subtasks, op)
+			else
+				table.insert(creates_toplevel, op)
+			end
+		end
+	end
+
+	-- Count total operations
+	local total_ops = #updates + #creates_toplevel + #creates_subtasks
 	if #operations.to_markdown > 0 then
 		total_ops = total_ops + 1
 	end
@@ -204,6 +402,7 @@ function M.execute_twoway_sync(operations, task_list_id, markdown_dir, list_name
 
 	local completed = 0
 	local errors = {}
+	local task_id_map = {} -- Maps markdown task index to Google task ID
 
 	local function op_complete(success, err_msg)
 		completed = completed + 1
@@ -212,6 +411,13 @@ function M.execute_twoway_sync(operations, task_list_id, markdown_dir, list_name
 		end
 
 		if completed >= total_ops then
+			-- Clean up orphaned tasks and save mapping
+			local removed_count = mapping.cleanup_orphaned_tasks(map, list_name, md_task_keys)
+			if removed_count > 0 then
+				vim.notify(string.format("Cleaned up %d orphaned task mapping(s)", removed_count), vim.log.levels.INFO)
+			end
+			mapping.save(map)
+
 			if #errors > 0 then
 				vim.notify("Sync completed with errors: " .. table.concat(errors, ", "), vim.log.levels.WARN)
 				if callback then
@@ -226,12 +432,105 @@ function M.execute_twoway_sync(operations, task_list_id, markdown_dir, list_name
 		end
 	end
 
-	-- Sync to Google
-	for _, op in ipairs(operations.to_google) do
-		if op.type == "create" then
-			M.create_google_task(op.markdown_task, task_list_id, op_complete)
-		elseif op.type == "update" then
-			M.update_google_task(op.markdown_task, op.google_task, task_list_id, op_complete)
+	-- Phase 1: Update existing tasks
+	for _, op in ipairs(updates) do
+		M.update_google_task(op.markdown_task, op.google_task, task_list_id, function(success, err_msg)
+			if success then
+				-- Update mapping with current information (title might have changed)
+				local file_path = op.markdown_task.source_file_path or ""
+				mapping.register_task(
+					map,
+					op.task_key,
+					op.google_task.id,
+					list_name,
+					op.markdown_task.title,
+					file_path,
+					op.markdown_task.line_number,
+					op.parent_key,
+					op.context_sig
+				)
+			end
+			op_complete(success, err_msg)
+		end)
+	end
+
+	-- Phase 2: Create top-level tasks
+	local toplevel_completed = 0
+	local toplevel_total = #creates_toplevel
+
+	if toplevel_total > 0 then
+		for _, op in ipairs(creates_toplevel) do
+			M.create_google_task(op.markdown_task, task_list_id, nil, function(success, err_msg, task_id, task_index)
+				if success and task_id and task_index then
+					task_id_map[task_index] = task_id
+
+					-- Register in mapping
+					local file_path = op.markdown_task.source_file_path or ""
+					mapping.register_task(
+						map,
+						op.task_key,
+						task_id,
+						list_name,
+						op.markdown_task.title,
+						file_path,
+						op.markdown_task.line_number,
+						nil, -- parent_key is nil for top-level tasks
+						op.context_sig
+					)
+				end
+				toplevel_completed = toplevel_completed + 1
+
+				-- When all top-level tasks are done, create subtasks
+				if toplevel_completed >= toplevel_total then
+					-- Phase 3: Create subtasks with parent references
+					for _, subop in ipairs(creates_subtasks) do
+						local parent_id = task_id_map[subop.markdown_task.parent_index]
+						M.create_google_task(subop.markdown_task, task_list_id, parent_id, function(sub_success, sub_err_msg, sub_task_id, sub_task_index)
+							if sub_success and sub_task_id then
+								-- Register subtask in mapping
+								local sub_file_path = subop.markdown_task.source_file_path or ""
+								mapping.register_task(
+									map,
+									subop.task_key,
+									sub_task_id,
+									list_name,
+									subop.markdown_task.title,
+									sub_file_path,
+									subop.markdown_task.line_number,
+									subop.parent_key,
+									subop.context_sig
+								)
+							end
+							op_complete(sub_success, sub_err_msg)
+						end)
+					end
+				end
+
+				op_complete(success, err_msg)
+			end)
+		end
+	else
+		-- No top-level tasks, go directly to subtasks
+		for _, subop in ipairs(creates_subtasks) do
+			local parent_id = task_id_map[subop.markdown_task.parent_index]
+			M.create_google_task(subop.markdown_task, task_list_id, parent_id, function(sub_success, sub_err_msg, sub_task_id, sub_task_index)
+				if sub_success and sub_task_id then
+					-- Register subtask in mapping
+					local sub_file_path = subop.markdown_task.source_file_path or ""
+					mapping.register_task(
+						map,
+						subop.task_key,
+						sub_task_id,
+						list_name,
+						subop.markdown_task.title,
+						sub_file_path,
+						subop.markdown_task.line_number,
+						subop.parent_key,
+						subop.context_sig
+					)
+				end
+				op_complete(sub_success, sub_err_msg)
+			end)
 		end
 	end
 
@@ -273,7 +572,7 @@ function M.write_google_tasks_to_markdown(tasks, markdown_dir, list_name, callba
 	local new_task_lines = {}
 	local new_task_count = 0
 	for _, gtask in ipairs(tasks) do
-		-- Skip if already exists in file
+		-- Skip if already exists in file (check by title for now)
 		if not existing_by_title[gtask.title] then
 			local checkbox = gtask.status == "completed" and "x" or " "
 			local task_line = string.format("- [%s] %s", checkbox, gtask.title)
@@ -294,10 +593,10 @@ function M.write_google_tasks_to_markdown(tasks, markdown_dir, list_name, callba
 			table.insert(new_task_lines, task_line)
 			new_task_count = new_task_count + 1
 
-			-- Add description/notes if present
+			-- Add description/notes if present (indented to same level as task)
 			if gtask.notes and gtask.notes ~= "" then
 				for line in gtask.notes:gmatch("[^\n]+") do
-					table.insert(new_task_lines, "    " .. line)
+					table.insert(new_task_lines, "  " .. line)
 				end
 			end
 		end

@@ -353,4 +353,78 @@ function M.get_or_create_list(list_name, callback)
 	end)
 end
 
+--- Create a task with optional parent and positioning
+--- Supports creating subtasks by specifying a parent task ID
+---@param task_list_id string The ID of the task list to create the task in
+---@param task_data table Task data (title, notes, status, due)
+---@param parent_id string|nil Parent task ID (nil for top-level tasks)
+---@param previous_id string|nil Previous sibling task ID for ordering (optional)
+---@param callback function Callback called with created task or error
+function M.create_task_with_parent(task_list_id, task_data, parent_id, previous_id, callback)
+	if not task_list_id or task_list_id == "" then
+		vim.notify("Task list ID is required", vim.log.levels.ERROR)
+		if callback then
+			callback(nil, "Task list ID is required")
+		end
+		return
+	end
+
+	if not task_data or not task_data.title then
+		vim.notify("Task data with title is required", vim.log.levels.ERROR)
+		if callback then
+			callback(nil, "Task data with title is required")
+		end
+		return
+	end
+
+	local url = string.format("https://tasks.googleapis.com/tasks/v1/lists/%s/tasks", task_list_id)
+
+	-- Build query parameters for parent and ordering
+	local query_params = {}
+	if parent_id and parent_id ~= "" then
+		table.insert(query_params, "parent=" .. parent_id)
+	end
+	if previous_id and previous_id ~= "" then
+		table.insert(query_params, "previous=" .. previous_id)
+	end
+
+	if #query_params > 0 then
+		url = url .. "?" .. table.concat(query_params, "&")
+	end
+
+	request({
+		method = "POST",
+		url = url,
+		body = task_data,
+	}, callback)
+end
+
+--- Delete a task
+--- Permanently deletes a task from Google Tasks
+---@param task_list_id string The ID of the task list containing the task
+---@param task_id string The ID of the task to delete
+---@param callback function Callback called with success or error
+function M.delete_task(task_list_id, task_id, callback)
+	if not task_list_id or task_list_id == "" then
+		vim.notify("Task list ID is required", vim.log.levels.ERROR)
+		if callback then
+			callback(nil, "Task list ID is required")
+		end
+		return
+	end
+
+	if not task_id or task_id == "" then
+		vim.notify("Task ID is required", vim.log.levels.ERROR)
+		if callback then
+			callback(nil, "Task ID is required")
+		end
+		return
+	end
+
+	request({
+		method = "DELETE",
+		url = string.format("https://tasks.googleapis.com/tasks/v1/lists/%s/tasks/%s", task_list_id, task_id),
+	}, callback)
+end
+
 return M

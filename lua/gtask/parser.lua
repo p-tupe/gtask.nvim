@@ -60,6 +60,9 @@ function M.parse_single_task(lines, start_index)
 		return nil, 0
 	end
 
+	-- Calculate the minimum indentation required for description (same as task)
+	local task_indent_chars = indent * 2
+
 	local task = {
 		title = title,
 		completed = checkbox == "x",
@@ -70,7 +73,7 @@ function M.parse_single_task(lines, start_index)
 		parent_index = nil,
 	}
 
-	-- Look for description lines (any non-task, non-empty lines following the task)
+	-- Look for description lines (non-task, non-empty lines at least as indented as the task)
 	-- Allow one empty line between task and description
 	local consumed_lines = 1
 	local description_parts = {}
@@ -96,11 +99,18 @@ function M.parse_single_task(lines, start_index)
 				break
 			end
 		else
-			-- Any other line is part of the description (strip leading/trailing whitespace)
-			local content = desc_line:match("^%s*(.+)%s*$")
-			if content then
-				table.insert(description_parts, content)
-				consumed_lines = consumed_lines + 1
+			-- Check if line is indented at least as much as the task
+			local line_indent = desc_line:match("^(%s*)")
+			if #line_indent >= task_indent_chars then
+				-- Line is properly indented, include it in description
+				local content = desc_line:match("^%s*(.+)%s*$")
+				if content then
+					table.insert(description_parts, content)
+					consumed_lines = consumed_lines + 1
+				end
+			else
+				-- Line is not indented enough, stop here
+				break
 			end
 		end
 	end
