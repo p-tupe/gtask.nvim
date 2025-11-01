@@ -24,7 +24,7 @@ Another major I face is that the "description" field is extremely cumbersome to 
 
 ### Setup Video (v0.1)
 
-![Video Setup](./video.mp4)
+https://github.com/user-attachments/assets/fd17810e-3a4e-4bdd-b3ae-3467d245cf5d
 
 ### Installation
 
