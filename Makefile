@@ -5,41 +5,15 @@ test:
 	@echo "Running all tests..."
 	@busted --pattern=_spec%.lua$
 
-# Run only unit tests
-test-unit:
-	@echo "Running unit tests..."
-	@busted --pattern=_spec%.lua$ tests/unit
-
-# Run only E2E tests
-test-e2e:
-	@echo "Running E2E tests..."
-	@busted --pattern=_spec%.lua$ tests/e2e
-
-# Run tests with verbose output
-test-verbose:
-	@echo "Running tests (verbose)..."
-	@busted --verbose --pattern=_spec%.lua$
-
-# Run tests with coverage
-test-coverage:
-	@echo "Running tests with coverage..."
-	@busted --coverage --pattern=_spec%.lua$
-	@echo "\nGenerating coverage report..."
-	@luacov
-	@echo "\nCoverage report:"
-	@cat luacov.report.out
-
 # Clean test artifacts
 clean:
 	@echo "Cleaning test artifacts..."
-	@rm -f luacov.*.out
 	@rm -rf /tmp/gtask_test*
 
 # Install test dependencies
 install-deps:
 	@echo "Installing test dependencies..."
 	@luarocks install busted || echo "busted already installed"
-	@luarocks install luacov || echo "luacov already installed"
 
 # Run linter (if available)
 lint:
