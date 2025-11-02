@@ -30,17 +30,20 @@ local function refresh_tokens(refresh_token, callback)
 
 	-- Prepare request body for proxy
 	local request_body = vim.fn.json_encode({
-		refresh_token = refresh_token
+		refresh_token = refresh_token,
 	})
 
 	Job:new({
 		command = "curl",
 		args = {
 			"-s",
-			"-X", "POST",
-			"-H", "Content-Type: application/json",
-			"-d", request_body,
-			get_proxy_url() .. "/auth/refresh"
+			"-X",
+			"POST",
+			"-H",
+			"Content-Type: application/json",
+			"-d",
+			request_body,
+			get_proxy_url() .. "/auth/refresh",
 		},
 		on_exit = function(j, return_val)
 			vim.schedule(function()

@@ -99,3 +99,5 @@ You may now update tasks in either markdown_dir or Google Tasks and :GtaskSync t
 - **Task matching**: Uses **positional matching** list→task1,task2→subtask1,subtask2... Optimal use would be to simply add a new task at the end, so other tasks aren't changed. If you move a task to a different line or insert one in between, it will end up deleting/recreating the tasks that have had their positions changed.
 - **File Rename**: Current behaviour for task file renames is undefined.
 - Please open an issue if you find more... :)
+
+See [gtask.nvim/wiki](https://github.com/p-tupe/gtask.nvim/wiki) for more details!

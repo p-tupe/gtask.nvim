@@ -132,7 +132,7 @@ function M.register_task(mapping, task_key, google_id, list_name, file_path, pos
 		file_path = file_path,
 		position_path = position_path,
 		parent_key = parent_key,
-		google_updated = google_updated or now,  -- Use provided timestamp or current time
+		google_updated = google_updated or now, -- Use provided timestamp or current time
 		deleted_from_google = false,
 		last_synced = now,
 	}

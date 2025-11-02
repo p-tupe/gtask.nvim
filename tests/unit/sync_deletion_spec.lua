@@ -1,7 +1,6 @@
 ---Unit tests for deletion and conflict resolution behavior
 describe("deletion and conflict resolution", function()
 	local mapping
-	local config
 	local vim_mock
 
 	before_each(function()
@@ -11,23 +10,40 @@ describe("deletion and conflict resolution", function()
 
 		-- Load modules (avoid loading sync module which has heavy dependencies)
 		mapping = require("gtask.mapping")
-		config = require("gtask.config")
 	end)
 
 	describe("deleted_from_google flag", function()
 		it("should not recreate tasks with deleted_from_google flag", function()
 			local map = { tasks = {} }
-			mapping.register_task(map, "List|/file.md:[0]", "google1", "List", "/file.md", "[0]", nil, "2025-01-01T10:00:00Z")
+			mapping.register_task(
+				map,
+				"List|/file.md:[0]",
+				"google1",
+				"List",
+				"/file.md",
+				"[0]",
+				nil,
+				"2025-01-01T10:00:00Z"
+			)
 			mapping.mark_deleted_from_google(map, "List|/file.md:[0]")
 
 			local task_data = map.tasks["List|/file.md:[0]"]
 			assert.is_true(task_data.deleted_from_google)
-			assert.equals("google1", task_data.google_id)  -- Still in mapping, just flagged
+			assert.equals("google1", task_data.google_id) -- Still in mapping, just flagged
 		end)
 
 		it("should mark deleted_from_google when task deleted from Google", function()
 			local map = { tasks = {} }
-			mapping.register_task(map, "List|/file.md:[0]", "google1", "List", "/file.md", "[0]", nil, "2025-01-01T10:00:00Z")
+			mapping.register_task(
+				map,
+				"List|/file.md:[0]",
+				"google1",
+				"List",
+				"/file.md",
+				"[0]",
+				nil,
+				"2025-01-01T10:00:00Z"
+			)
 
 			-- Mark as deleted
 			mapping.mark_deleted_from_google(map, "List|/file.md:[0]")
@@ -41,7 +57,16 @@ describe("deletion and conflict resolution", function()
 
 		it("should preserve task metadata when marked deleted", function()
 			local map = { tasks = {} }
-			mapping.register_task(map, "List|/file.md:[0]", "google1", "List", "/file.md", "[0]", nil, "2025-01-01T10:00:00Z")
+			mapping.register_task(
+				map,
+				"List|/file.md:[0]",
+				"google1",
+				"List",
+				"/file.md",
+				"[0]",
+				nil,
+				"2025-01-01T10:00:00Z"
+			)
 
 			local original_google_id = map.tasks["List|/file.md:[0]"].google_id
 			local original_list_name = map.tasks["List|/file.md:[0]"].list_name
@@ -62,23 +87,8 @@ describe("deletion and conflict resolution", function()
 			-- Register task with old timestamp
 			mapping.register_task(map, task_key, "google1", "List", "/file.md", "[0]", nil, "2025-01-01T10:00:00Z")
 
-			-- Markdown task is incomplete
-			local md_task = {
-				title = "Task 1",
-				completed = false,
-				position_path = "[0]",
-				source_file_path = "/file.md"
-			}
-
-			-- Google task is completed with newer timestamp
-			local g_task = {
-				id = "google1",
-				title = "Task 1",
-				status = "completed",
-				updated = "2025-01-01T12:00:00Z"  -- Newer than mapping
-			}
-
 			-- Verify timestamps can be compared
+			-- (Google's timestamp "2025-01-01T12:00:00Z" is newer than mapping's "2025-01-01T10:00:00Z")
 			assert.is_true("2025-01-01T12:00:00Z" > "2025-01-01T10:00:00Z")
 		end)
 
@@ -117,16 +127,22 @@ describe("deletion and conflict resolution", function()
 
 		it("should update last_synced timestamp", function()
 			local map = { tasks = {} }
-			mapping.register_task(map, "List|/file.md:[0]", "google1", "List", "/file.md", "[0]", nil, "2025-01-01T10:00:00Z")
+			mapping.register_task(
+				map,
+				"List|/file.md:[0]",
+				"google1",
+				"List",
+				"/file.md",
+				"[0]",
+				nil,
+				"2025-01-01T10:00:00Z"
+			)
 
-			local old_synced = map.tasks["List|/file.md:[0]"].last_synced
-
-			-- Wait a moment to ensure timestamp changes (in real scenario)
+			-- Mark task as deleted from Google
 			mapping.mark_deleted_from_google(map, "List|/file.md:[0]")
 
 			local new_synced = map.tasks["List|/file.md:[0]"].last_synced
 			assert.is_not_nil(new_synced)
-			-- In practice, new_synced should be >= old_synced
 		end)
 
 		it("should not fail for non-existent task", function()
@@ -144,16 +160,7 @@ describe("deletion and conflict resolution", function()
 			local map = { tasks = {} }
 			local timestamp = "2025-01-01T15:30:00Z"
 
-			mapping.register_task(
-				map,
-				"List|/file.md:[0]",
-				"google1",
-				"List",
-				"/file.md",
-				"[0]",
-				nil,
-				timestamp
-			)
+			mapping.register_task(map, "List|/file.md:[0]", "google1", "List", "/file.md", "[0]", nil, timestamp)
 
 			assert.equals(timestamp, map.tasks["List|/file.md:[0]"].google_updated)
 		end)
@@ -169,13 +176,15 @@ describe("deletion and conflict resolution", function()
 				"/file.md",
 				"[0]",
 				nil,
-				nil  -- No timestamp provided
+				nil -- No timestamp provided
 			)
 
 			-- Should have some timestamp
 			assert.is_not_nil(map.tasks["List|/file.md:[0]"].google_updated)
 			-- Should be in RFC3339 format
-			assert.is_not_nil(map.tasks["List|/file.md:[0]"].google_updated:match("%d%d%d%d%-%d%d%-%d%dT%d%d:%d%d:%d%dZ"))
+			assert.is_not_nil(
+				map.tasks["List|/file.md:[0]"].google_updated:match("%d%d%d%d%-%d%d%-%d%dT%d%d:%d%d:%d%dZ")
+			)
 		end)
 
 		it("should initialize deleted_from_google to false", function()
@@ -221,9 +230,8 @@ describe("deletion and conflict resolution", function()
 			local config = require("gtask.config")
 
 			assert.has_error(function()
-				config.setup({ keep_completed_in_markdown = "true" })  -- String instead of boolean
+				config.setup({ keep_completed_in_markdown = "true" }) -- String instead of boolean
 			end)
 		end)
 	end)
-
 end)

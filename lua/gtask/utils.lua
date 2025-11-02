@@ -4,14 +4,17 @@ local M = {}
 
 --- Notify user with message, respecting verbosity settings
 ---@param msg string The message to display
----@param level number The vim.log.levels level (DEBUG, INFO, WARN, ERROR)
+---@param level? number The vim.log.levels level (DEBUG, INFO, WARN, ERROR). Defaults to INFO if not provided.
 function M.notify(msg, level)
+	-- Default to INFO level if not provided
+	level = level or vim.log.levels.INFO
+
 	local config = require("gtask.config")
 	-- Use get() to access current config value, not the cached field
 	local verbosity = config.get().verbosity
 
 	-- Map verbosity level to minimum required log level
-	local min_level = vim.log.levels.ERROR  -- Default: only errors
+	local min_level = vim.log.levels.ERROR -- Default: only errors
 
 	if verbosity == "warn" then
 		min_level = vim.log.levels.WARN

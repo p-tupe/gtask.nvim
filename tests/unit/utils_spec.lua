@@ -93,6 +93,29 @@ describe("utils module", function()
 			assert.is_not_nil(vim_mock.find_notification("Warning message"))
 			assert.is_not_nil(vim_mock.find_notification("Error message"))
 		end)
+
+		it("should default to INFO level when level not provided", function()
+			vim_mock.clear_notifications()
+			config.setup({ verbosity = "info" })
+
+			-- Call without level parameter
+			utils.notify("Default level message")
+
+			local notif = vim_mock.find_notification("Default level message")
+			assert.is_not_nil(notif)
+			assert.equals(vim.log.levels.INFO, notif.level)
+		end)
+
+		it("should not show messages with default INFO level when verbosity is error", function()
+			vim_mock.clear_notifications()
+			config.setup({ verbosity = "error" })
+
+			-- Call without level parameter (defaults to INFO)
+			utils.notify("Default level message")
+
+			local notif = vim_mock.find_notification("Default level message")
+			assert.is_nil(notif)
+		end)
 	end)
 
 	describe("config verbosity validation", function()
