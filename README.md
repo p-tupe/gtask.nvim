@@ -39,11 +39,40 @@ https://github.com/user-attachments/assets/fd17810e-3a4e-4bdd-b3ae-3467d245cf5d
 require("gtask").setup()
 ```
 
+## Configuration
+
+All options are optional. Heh.
+
+```lua
+-- Default Options
+require("gtask").setup({
+  markdown_dir = "~/gtask.nvim",                     -- Directory of markdown files
+  ignore_patterns = {},                              -- Files/dirs to skip like "archive", "draft.md"
+  proxy_url = "https://app.priteshtupe.com/gtask",   -- OAuth proxy
+  keep_completed_in_markdown = true,                 -- Keep completed tasks in markdown even if deleted from Google Tasks
+  verbosity = "error",                               -- Logging level: "error", "warn", or "info"
+})
+```
+
+- `markdown_dir` : **Absolute path** to your markdown directory. Must start with `/` or `~` (no relative paths like `./notes`)
+- `proxy_url` : URL of your OAuth proxy backend.
+- `ignore_patterns` : List of directory names or `.md` file names to ignore when scanning. Directory names will skip entire subdirectories, file names will skip specific markdown files.
+- `keep_completed_in_markdown` : When `true`, completed tasks deleted from Google Tasks will remain in your markdown files as historical records. When `false`, they will be deleted from markdown to mirror Google Tasks exactly.
+- `verbosity` : Controls which log messages are displayed:
+  - `"error"`: Only show error messages
+  - `"warn"`: Show warnings and errors
+  - `"info"`: Show all messages including info, warnings, and errors
+
+> I recommend setting `verbosity` to `"info"` for initial setup.
+
 ### Basic Usage
 
-1. **Authenticate**: Run `:GtaskAuth` and visit the URL in your browser
-2. **Create tasks** in markdown files (see format below)
-3. **Sync**: Run `:GtaskSync` to sync with Google Tasks
+1. Configure gtask.nvim using setup options if you have an existing directory or custom proxy
+1. Run `:GtaskAuth` and follow the steps to authenticate
+1. **Sync**: Run `:GtaskSync` to sync with Google Tasks
+1. Done!
+
+You may now update tasks in either markdown_dir or Google Tasks and :GtaskSync to synchronize them. An autocommand may be set-up to autosync on changes in markdown_dir.
 
 ### Task Format
 
@@ -65,170 +94,8 @@ require("gtask").setup()
           Friend's contact number: xxx-yyy-zz `<-- This is sub-task's description`
 ```
 
-## Configuration
+## Known Issues
 
-All options are optional. Heh.
-
-```lua
-require("gtask").setup({
-  markdown_dir = "~/gtask.nvim",                     -- Where to store markdown files
-  proxy_url = "https://app.priteshtupe.com/gtask",   -- OAuth proxy (default is fine)
-  ignore_patterns = { "archive", "draft.md" },       -- Files/dirs to skip
-})
-```
-
-## Commands
-
-- **`:GtaskAuth`** - Authenticate with Google (one-time setup)
-- **`:GtaskSync`** - Sync markdown files with Google Tasks
-
-## Known Issues & Limitations
-
-- **Task matching**: Uses **positional matching** list->task1,task2->subtask1,subtask2... Optimal use would be to simply add a new task at the end, so other tasks aren't changed. If you move a task to a different line or insert one in between, it will end up deleting/recreating the tasks that have had their positions changed.
+- **Task matching**: Uses **positional matching** list→task1,task2→subtask1,subtask2... Optimal use would be to simply add a new task at the end, so other tasks aren't changed. If you move a task to a different line or insert one in between, it will end up deleting/recreating the tasks that have had their positions changed.
 - **File Rename**: Current behaviour for task file renames is undefined.
 - Please open an issue if you find more... :)
-
-## Wiki
-
-### Testing
-
-```bash
-# To install dependencies: make install-deps
-make test
-```
-
-See [tests/README.md](tests/README.md) for detailed testing documentation.
-
-### Configuration Options
-
-- `markdown_dir` (string): **Absolute path** to your markdown directory. Default: `~/gtask.nvim`. Must start with `/` or `~` (no relative paths like `./notes`)
-- `proxy_url` (string): URL of your OAuth proxy backend. Default: `https://app.priteshtupe.com/gtask`
-- `ignore_patterns` (string[]): List of directory names or `.md` file names to ignore when scanning. Directory names will skip entire subdirectories, file names will skip specific markdown files. Default: `{}`
-
-### Authentication & Security
-
-The plugin uses a secure OAuth proxy service for authentication. No manual Google Cloud setup required!
-
-**Authentication Flow:**
-
-1. Run `:GtaskAuth` in Neovim
-2. The auth URL is displayed in `:messages` and copied to your clipboard
-3. Visit the URL in your browser and complete Google OAuth consent (you'll see an "unverified app" warning - see why below)
-4. Authentication completes automatically - return to Neovim
-
-**Note:** You only need to authenticate once. Tokens are stored securely in Neovim's data directory and refreshed automatically.
-
-#### Why "Unverified App" Warning?
-
-When you authenticate, Google will show a warning that gtask.nvim is an "unverified app". This is **expected** - here's why:
-
-**What "unverified" means:**
-
-- Google requires apps to go through a security verification process before removing this warning
-- Verification is designed for commercial apps and requires:
-  - Formal security audits ($15,000-$75,000 cost)
-  - Legal documentation (privacy policies, terms of service)
-  - Company information and compliance certifications
-  - Ongoing compliance reviews
-
-**Why gtask.nvim is unverified:**
-
-- This is a small open-source personal project, not a commercial application
-- The verification process is prohibitively expensive and time-consuming for hobby projects
-- Many legitimate open-source tools remain unverified for this reason
-
-**Is it safe to proceed?**
-
-- **Yes!** The code is open source - you can review exactly what it does
-- The OAuth proxy only handles authentication - it never sees or stores your task data
-- Your tasks sync directly between Neovim and Google's servers
-- Tokens are stored locally on your machine only
-- You may also host the backend server yourself and eliminate all third-parties
-
-**How to proceed:**
-
-1. Click "Advanced" on the warning screen
-2. Click "Go to gtask.nvim (unsafe)"
-3. Grant the requested permissions (read/write access to Google Tasks only)
-
-The "unsafe" label is Google's standard warning for unverified apps - it doesn't mean the app is actually unsafe.
-
-### Markdown Task Format
-
-Tasks use standard markdown checkbox syntax!**Format Rules:**
-
-- **List name**: H1 heading (`# Name`) becomes Google Tasks list name (filename is auto-normalized to lowercase with hyphens)
-- **Task hierarchy**: Subtasks must be indented alteast 2 spaces from their parent
-- **Task descriptions**: Any non-task, non-empty line following a task becomes its description (no strict indentation required)
-- **Checkbox format**: `- [ ]` for incomplete, `- [x]` for completed
-- **Due dates**: Optional `| YYYY-MM-DD` or `| YYYY-MM-DD HH:MM` after task title
-  - Time is optional; if omitted, defaults to midnight UTC
-  - When syncing from Google, time is only shown if not midnight
-- **Blank lines**: One blank line may separate a task from its description
-
-### 2-Way Sync
-
-`:GtaskSync` performs intelligent bidirectional synchronization:
-
-1. **Scans your markdown directory** (default: `~/gtask.nvim`, or configured in `setup()`) for all `.md` files recursively
-2. **Fetches all Google Task lists** from your account
-3. **Groups tasks by H1 heading** (list name)
-4. **For each list**:
-   - Finds or creates the list in Google Tasks
-   - Fetches existing tasks from that list
-   - Syncs in both directions:
-     - Tasks in markdown but not in Google → Created in Google Tasks
-     - Tasks in Google but not in markdown → Written to `[normalized-list-name].md`
-     - Tasks in both locations → Updated to match (markdown is source of truth)
-
-**Important Notes:**
-
-- Filenames are auto-normalized (e.g., "My Shopping List" → `my-shopping-list.md`) to prevent duplicates
-- The H1 heading in the file preserves the original list name from Google Tasks
-- The markdown directory is created automatically if it doesn't exist
-- Files/directories matching `ignore_patterns` are skipped during scanning
-
-### Example Workflows
-
-**Starting from Google Tasks (pulling down existing tasks):**
-
-```bash
-# 1. Authenticate once
-:GtaskAuth
-
-# 2. Run sync to pull tasks from Google
-:GtaskSync
-```
-
-After syncing:
-
-- Tasks from each Google Tasks list will be written to separate files: `~/gtask.nvim/[ListName].md`
-- You can then:
-  - Review and organize these tasks
-  - Move them to your own markdown files
-  - Edit and re-sync to update Google Tasks
-  - Keep the files for continued syncing
-
-**Starting from markdown (pushing up new tasks):**
-
-```bash
-# 1. Authenticate once
-:GtaskAuth
-
-# 2. Create a markdown file in ~/gtask.nvim/ (or your configured directory)
-# File: ~/gtask.nvim/shopping-list.md
-
-# Shopping List
-- [ ] Buy milk | 2025-01-15
-- [ ] Get eggs
-    Remember to get organic eggs
-
-# 3. Sync anytime
-:GtaskSync
-```
-
-After syncing:
-
-- A "Shopping List" will be created (or found) in Google Tasks
-- Your tasks will be synced with due dates and descriptions
-- Any tasks from Google Tasks will appear in `[ListName].md` files

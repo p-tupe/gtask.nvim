@@ -3,6 +3,7 @@
 local M = {}
 
 local config = require("gtask.config")
+local utils = require("gtask.utils")
 
 --- Get the configured markdown directory
 ---@return string|nil Directory path or nil if not configured
@@ -29,7 +30,7 @@ function M.validate_markdown_dir()
 			return false, "Failed to create markdown directory: " .. dir .. " (" .. tostring(err) .. ")"
 		end
 
-		vim.notify("Created markdown directory: " .. dir, vim.log.levels.INFO)
+		utils.notify("Created markdown directory: " .. dir, vim.log.levels.INFO)
 		return true, nil
 	end
 
@@ -69,7 +70,7 @@ end
 function M.find_markdown_files()
 	local dir = M.get_markdown_dir()
 	if not dir then
-		vim.notify("Markdown directory not configured", vim.log.levels.ERROR)
+		utils.notify("Markdown directory not configured", vim.log.levels.ERROR)
 		return {}
 	end
 
@@ -159,7 +160,7 @@ end
 function M.parse_all_markdown_files()
 	local valid, err = M.validate_markdown_dir()
 	if not valid then
-		vim.notify(err, vim.log.levels.ERROR)
+		utils.notify(err, vim.log.levels.ERROR)
 		return {}
 	end
 
@@ -171,7 +172,7 @@ function M.parse_all_markdown_files()
 		if data and #data.tasks > 0 then
 			table.insert(all_data, data)
 		elseif parse_err then
-			vim.notify("Error parsing " .. file_path .. ": " .. parse_err, vim.log.levels.WARN)
+			utils.notify("Error parsing " .. file_path .. ": " .. parse_err, vim.log.levels.WARN)
 		end
 	end
 

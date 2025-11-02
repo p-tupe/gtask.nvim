@@ -4,6 +4,7 @@ local api = require("gtask.api")
 local parser = require("gtask.parser")
 local files = require("gtask.files")
 local mapping = require("gtask.mapping")
+local utils = require("gtask.utils")
 
 ---Normalize a list name to a safe filename
 ---@param list_name string The list name to normalize
@@ -71,7 +72,7 @@ end
 ---@param mdtask Task Markdown task to create
 ---@param task_list_id string Google Tasks list ID
 ---@param parent_id string|nil Parent task ID (nil for top-level)
----@param callback function Callback when operation completes (success, err_msg, task_id, task_index)
+---@param callback function Callback when operation completes (success, err_msg, created_task)
 function M.create_google_task(mdtask, task_list_id, parent_id, callback)
 	local google_task = {
 		title = mdtask.title,
@@ -89,10 +90,10 @@ function M.create_google_task(mdtask, task_list_id, parent_id, callback)
 	-- Use create_task_with_parent which handles both top-level and subtasks
 	api.create_task_with_parent(task_list_id, google_task, parent_id, nil, function(response, err)
 		if err then
-			callback(false, "Failed to create task: " .. mdtask.title, nil, nil)
+			callback(false, "Failed to create task: " .. mdtask.title, nil)
 		else
-			-- Return success, no error, the new task ID, and the task's line_number (as index)
-			callback(true, nil, response.id, mdtask.line_number)
+			-- Return success, no error, and the full task response (includes id and updated timestamp)
+			callback(true, nil, response)
 		end
 	end)
 end
@@ -101,7 +102,7 @@ end
 ---@param mdtask Task Markdown task with new data
 ---@param gtask table Existing Google task to update
 ---@param task_list_id string Google Tasks list ID
----@param callback function Callback when operation completes
+---@param callback function Callback when operation completes (success, err_msg, updated_task)
 function M.update_google_task(mdtask, gtask, task_list_id, callback)
 	local updated_task = {
 		title = mdtask.title,
@@ -118,9 +119,10 @@ function M.update_google_task(mdtask, gtask, task_list_id, callback)
 
 	api.update_task(task_list_id, gtask.id, updated_task, function(response, err)
 		if err then
-			callback(false, "Failed to update task: " .. mdtask.title)
+			callback(false, "Failed to update task: " .. mdtask.title, nil)
 		else
-			callback(true)
+			-- Return the full response (includes updated timestamp)
+			callback(true, nil, response)
 		end
 	end)
 end
@@ -146,6 +148,7 @@ function M.perform_twoway_sync(sync_state, callback)
 
 	-- Build task keys with exact position matching only
 	local md_task_keys = {}
+	local md_task_keys_set = {}
 	local all_md_tasks_with_keys = {}
 
 	for i, mdtask in ipairs(markdown_tasks) do
@@ -155,9 +158,16 @@ function M.perform_twoway_sync(sync_state, callback)
 		-- Generate tree-position-based key using position_path
 		local task_key = mapping.generate_task_key(list_name, file_path, mdtask.position_path)
 
-		-- Exact position match only
-		local google_id = mapping.get_google_id(map, task_key)
+		-- Get mapping data for this task
+		local mapping_data = map.tasks[task_key]
+		local google_id = mapping_data and mapping_data.google_id or nil
 		local matched_gtask = nil
+
+		-- Skip if task was deleted from Google (don't recreate)
+		if mapping_data and mapping_data.deleted_from_google then
+			-- Task was deleted from Google, don't sync
+			goto continue
+		end
 
 		if google_id and google_by_id[google_id] then
 			-- Found exact match at this position
@@ -165,19 +175,38 @@ function M.perform_twoway_sync(sync_state, callback)
 		end
 
 		table.insert(md_task_keys, task_key)
+		md_task_keys_set[task_key] = true
 		table.insert(all_md_tasks_with_keys, {
 			task = mdtask,
 			key = task_key,
 			task_index = i,  -- Store array index for parent-child mapping
 			google_id = google_id,
 			matched_gtask = matched_gtask,
+			mapping_data = mapping_data,
 		})
+
+		::continue::
+	end
+
+	-- Detect tasks deleted from markdown (exist in mapping but not in current markdown)
+	local deleted_from_markdown = {}
+	for task_key, mapping_data in pairs(map.tasks) do
+		if mapping_data.list_name == list_name and not md_task_keys_set[task_key] and not mapping_data.deleted_from_google then
+			-- Task was in mapping but not in current markdown
+			table.insert(deleted_from_markdown, {
+				key = task_key,
+				google_id = mapping_data.google_id,
+				mapping_data = mapping_data,
+			})
+		end
 	end
 
 	-- Build operations based on exact matching results
 	local operations = {
 		to_google = {},
 		to_markdown = {},
+		delete_from_google = {},
+		delete_from_markdown = {},
 	}
 	local seen_google_ids = {}
 
@@ -192,20 +221,81 @@ function M.perform_twoway_sync(sync_state, callback)
 			seen_google_ids[item.google_id] = true
 
 			if item.matched_gtask then
-				-- Task exists in both, check if update needed
-				if M.task_needs_update(item.task, item.matched_gtask) then
-					table.insert(operations.to_google, {
-						type = "update",
-						markdown_task = item.task,
-						google_task = item.matched_gtask,
-						task_key = item.key,
-						task_index = item.task_index,
-						parent_key = parent_key,
-					})
+				-- Task exists in both locations
+				local needs_update = false
+				local update_direction = nil  -- "to_google" or "to_markdown"
+
+				-- Check completion status conflict
+				local md_completed = item.task.completed
+				local g_completed = (item.matched_gtask.status == "completed")
+
+				if md_completed ~= g_completed then
+					-- Completion status conflict - use timestamps to resolve
+					local google_updated = item.matched_gtask.updated
+					local mapping_google_updated = item.mapping_data and item.mapping_data.google_updated
+
+					if google_updated and mapping_google_updated and google_updated > mapping_google_updated then
+						-- Google was modified since last sync - Google wins
+						update_direction = "to_markdown"
+						needs_update = true
+					else
+						-- Markdown is newer or timestamps equal - Markdown wins
+						update_direction = "to_google"
+						needs_update = true
+					end
+				elseif M.task_needs_update(item.task, item.matched_gtask) then
+					-- Other changes (description, due date, title)
+					update_direction = "to_google"
+					needs_update = true
+				end
+
+				if needs_update then
+					if update_direction == "to_google" then
+						table.insert(operations.to_google, {
+							type = "update",
+							markdown_task = item.task,
+							google_task = item.matched_gtask,
+							task_key = item.key,
+							task_index = item.task_index,
+							parent_key = parent_key,
+						})
+					else  -- to_markdown
+						table.insert(operations.to_markdown, {
+							type = "update_completion",
+							google_task = item.matched_gtask,
+							task_key = item.key,
+							file_path = item.task.source_file_path,
+							line_number = item.task.line_number,
+						})
+					end
 				end
 			else
-				-- Task was deleted in Google
-				vim.notify(string.format("Task '%s' was deleted in Google Tasks", item.task.title), vim.log.levels.INFO)
+				-- Task was deleted from Google
+				local config = require("gtask.config")
+				if item.task.completed then
+					-- Completed task deleted from Google
+					if config.sync.keep_completed_in_markdown then
+						-- Mark as deleted, keep in markdown
+						mapping.mark_deleted_from_google(map, item.key)
+						utils.notify(string.format("Completed task deleted from Google (kept in markdown): %s", item.task.title), vim.log.levels.INFO)
+					else
+						-- Delete from markdown too
+						table.insert(operations.delete_from_markdown, {
+							task_key = item.key,
+							file_path = item.task.source_file_path,
+							line_number = item.task.line_number,
+							title = item.task.title,
+						})
+					end
+				else
+					-- Incomplete task deleted from Google - delete from markdown
+					table.insert(operations.delete_from_markdown, {
+						task_key = item.key,
+						file_path = item.task.source_file_path,
+						line_number = item.task.line_number,
+						title = item.task.title,
+					})
+				end
 			end
 		else
 			-- No mapping at this position - new task
@@ -226,13 +316,26 @@ function M.perform_twoway_sync(sync_state, callback)
 		end
 	end
 
+	-- Add delete operations for tasks deleted from markdown
+	for _, deleted_item in ipairs(deleted_from_markdown) do
+		table.insert(operations.delete_from_google, {
+			google_id = deleted_item.google_id,
+			task_key = deleted_item.key,
+		})
+	end
+
 	-- Report sync plan
-	vim.notify(string.format(
-		"Sync plan: %d to Google (%d new, %d updates), %d to markdown",
-		#operations.to_google,
-		#vim.tbl_filter(function(op) return op.type == "create" end, operations.to_google),
-		#vim.tbl_filter(function(op) return op.type == "update" end, operations.to_google),
-		#operations.to_markdown
+	local new_to_google = #vim.tbl_filter(function(op) return op.type == "create" end, operations.to_google)
+	local updates_to_google = #vim.tbl_filter(function(op) return op.type == "update" end, operations.to_google)
+	local new_to_markdown = #vim.tbl_filter(function(op) return type(op) == "table" and not op.type end, operations.to_markdown)
+	local updates_to_markdown = #vim.tbl_filter(function(op) return type(op) == "table" and op.type == "update_completion" end, operations.to_markdown)
+
+	utils.notify(string.format(
+		"Sync plan: %d→Google (%d new, %d update), %d→markdown (%d new, %d update), %d deletions from Google, %d deletions from markdown",
+		new_to_google + updates_to_google, new_to_google, updates_to_google,
+		new_to_markdown + updates_to_markdown, new_to_markdown, updates_to_markdown,
+		#operations.delete_from_markdown,
+		#operations.delete_from_google
 	))
 
 	-- Execute sync operations with mapping
@@ -266,13 +369,14 @@ function M.execute_twoway_sync(operations, task_list_id, markdown_dir, list_name
 	end
 
 	-- Count total operations
-	local total_ops = #updates + #creates_toplevel + #creates_subtasks
+	local total_ops = #updates + #creates_toplevel + #creates_subtasks +
+	                   #operations.delete_from_google + #operations.delete_from_markdown
 	if #operations.to_markdown > 0 then
 		total_ops = total_ops + 1
 	end
 
 	if total_ops == 0 then
-		vim.notify("All tasks are in sync!")
+		utils.notify("All tasks are in sync!")
 		if callback then
 			callback(true)
 		end
@@ -293,17 +397,17 @@ function M.execute_twoway_sync(operations, task_list_id, markdown_dir, list_name
 			-- Clean up orphaned tasks (mapping will be saved at the top level after all lists sync)
 			local removed_count = mapping.cleanup_orphaned_tasks(map, list_name, md_task_keys)
 			if removed_count > 0 then
-				vim.notify(string.format("Cleaned up %d orphaned task mapping(s)", removed_count), vim.log.levels.INFO)
+				utils.notify(string.format("Cleaned up %d orphaned task mapping(s)", removed_count), vim.log.levels.INFO)
 			end
 			-- Note: mapping.save() is now called in sync_multiple_lists after all lists complete
 
 			if #errors > 0 then
-				vim.notify("Sync completed with errors: " .. table.concat(errors, ", "), vim.log.levels.WARN)
+				utils.notify("Sync completed with errors: " .. table.concat(errors, ", "), vim.log.levels.WARN)
 				if callback then
 					callback(false)
 				end
 			else
-				vim.notify("2-way sync completed successfully!")
+				utils.notify("2-way sync completed successfully!")
 				if callback then
 					callback(true)
 				end
@@ -313,10 +417,11 @@ function M.execute_twoway_sync(operations, task_list_id, markdown_dir, list_name
 
 	-- Phase 1: Update existing tasks
 	for _, op in ipairs(updates) do
-		M.update_google_task(op.markdown_task, op.google_task, task_list_id, function(success, err_msg)
+		M.update_google_task(op.markdown_task, op.google_task, task_list_id, function(success, err_msg, updated_task)
 			if success then
-				-- Update mapping with current information
+				-- Update mapping with current information and new timestamp
 				local file_path = op.markdown_task.source_file_path or ""
+				local google_updated = (updated_task and updated_task.updated) or op.google_task.updated or os.date("!%Y-%m-%dT%H:%M:%SZ")
 				mapping.register_task(
 					map,
 					op.task_key,
@@ -324,8 +429,33 @@ function M.execute_twoway_sync(operations, task_list_id, markdown_dir, list_name
 					list_name,
 					file_path,
 					op.markdown_task.position_path,
-					op.parent_key
+					op.parent_key,
+					google_updated
 				)
+			end
+			op_complete(success, err_msg)
+		end)
+	end
+
+	-- Phase 1.5: Delete from Google (tasks deleted from markdown)
+	for _, del_op in ipairs(operations.delete_from_google) do
+		api.delete_task(task_list_id, del_op.google_id, function(success, err)
+			if success then
+				-- Remove from mapping
+				mapping.remove_task(map, del_op.task_key)
+				utils.notify(string.format("Deleted task from Google: %s", del_op.task_key), vim.log.levels.INFO)
+			end
+			op_complete(success, err and ("Failed to delete from Google: " .. err) or nil)
+		end)
+	end
+
+	-- Phase 1.6: Delete from markdown (tasks deleted from Google)
+	for _, del_op in ipairs(operations.delete_from_markdown) do
+		M.delete_task_from_markdown(del_op.file_path, del_op.line_number, function(success, err_msg)
+			if success then
+				-- Remove from mapping
+				mapping.remove_task(map, del_op.task_key)
+				utils.notify(string.format("Deleted task from markdown: %s", del_op.title), vim.log.levels.INFO)
 			end
 			op_complete(success, err_msg)
 		end)
@@ -337,20 +467,21 @@ function M.execute_twoway_sync(operations, task_list_id, markdown_dir, list_name
 
 	if toplevel_total > 0 then
 		for _, op in ipairs(creates_toplevel) do
-			M.create_google_task(op.markdown_task, task_list_id, nil, function(success, err_msg, task_id, _)
-				if success and task_id then
-					task_id_map[op.task_index] = task_id
+			M.create_google_task(op.markdown_task, task_list_id, nil, function(success, err_msg, created_task)
+				if success and created_task then
+					task_id_map[op.task_index] = created_task.id
 
-					-- Register in mapping
+					-- Register in mapping with google_updated timestamp
 					local file_path = op.markdown_task.source_file_path or ""
 					mapping.register_task(
 						map,
 						op.task_key,
-						task_id,
+						created_task.id,
 						list_name,
 						file_path,
 						op.markdown_task.position_path,
-						nil -- parent_key is nil for top-level tasks
+						nil, -- parent_key is nil for top-level tasks
+						created_task.updated
 					)
 				end
 				toplevel_completed = toplevel_completed + 1
@@ -360,18 +491,19 @@ function M.execute_twoway_sync(operations, task_list_id, markdown_dir, list_name
 					-- Phase 3: Create subtasks with parent references
 					for _, subop in ipairs(creates_subtasks) do
 						local parent_id = task_id_map[subop.markdown_task.parent_index]
-						M.create_google_task(subop.markdown_task, task_list_id, parent_id, function(sub_success, sub_err_msg, sub_task_id, _)
-							if sub_success and sub_task_id then
-								-- Register subtask in mapping
+						M.create_google_task(subop.markdown_task, task_list_id, parent_id, function(sub_success, sub_err_msg, sub_created_task)
+							if sub_success and sub_created_task then
+								-- Register subtask in mapping with google_updated timestamp
 								local sub_file_path = subop.markdown_task.source_file_path or ""
 								mapping.register_task(
 									map,
 									subop.task_key,
-									sub_task_id,
+									sub_created_task.id,
 									list_name,
 									sub_file_path,
 									subop.markdown_task.position_path,
-									subop.parent_key
+									subop.parent_key,
+									sub_created_task.updated
 								)
 							end
 							op_complete(sub_success, sub_err_msg)
@@ -386,18 +518,19 @@ function M.execute_twoway_sync(operations, task_list_id, markdown_dir, list_name
 		-- No top-level tasks, go directly to subtasks
 		for _, subop in ipairs(creates_subtasks) do
 			local parent_id = task_id_map[subop.markdown_task.parent_index]
-			M.create_google_task(subop.markdown_task, task_list_id, parent_id, function(sub_success, sub_err_msg, sub_task_id, _)
-				if sub_success and sub_task_id then
-					-- Register subtask in mapping
+			M.create_google_task(subop.markdown_task, task_list_id, parent_id, function(sub_success, sub_err_msg, sub_created_task)
+				if sub_success and sub_created_task then
+					-- Register subtask in mapping with google_updated timestamp
 					local sub_file_path = subop.markdown_task.source_file_path or ""
 					mapping.register_task(
 						map,
 						subop.task_key,
-						sub_task_id,
+						sub_created_task.id,
 						list_name,
 						sub_file_path,
 						subop.markdown_task.position_path,
-						subop.parent_key
+						subop.parent_key,
+						sub_created_task.updated
 					)
 				end
 				op_complete(sub_success, sub_err_msg)
@@ -405,10 +538,40 @@ function M.execute_twoway_sync(operations, task_list_id, markdown_dir, list_name
 		end
 	end
 
-	-- Sync to markdown (single operation for all tasks)
-	if #operations.to_markdown > 0 then
-		M.write_google_tasks_to_markdown(operations.to_markdown, markdown_dir, list_name, function(success)
+	-- Phase 4: Sync to markdown
+	-- Separate new tasks from completion updates
+	local new_tasks_to_markdown = {}
+	local completion_updates = {}
+
+	for _, op in ipairs(operations.to_markdown) do
+		if type(op) == "table" and op.type == "update_completion" then
+			table.insert(completion_updates, op)
+		else
+			table.insert(new_tasks_to_markdown, op)
+		end
+	end
+
+	-- Phase 4a: Write new tasks to markdown (single operation for all new tasks)
+	if #new_tasks_to_markdown > 0 then
+		M.write_google_tasks_to_markdown(new_tasks_to_markdown, markdown_dir, list_name, function(success)
 			op_complete(success, success and nil or "Failed to write tasks to markdown")
+		end)
+	end
+
+	-- Phase 4b: Update completion status in markdown (individual operations)
+	for _, update_op in ipairs(completion_updates) do
+		local completed = (update_op.google_task.status == "completed")
+		M.update_task_completion_in_markdown(update_op.file_path, update_op.line_number, completed, function(success, err_msg)
+			if success then
+				-- Update mapping with new Google timestamp
+				local mapping_data = map.tasks[update_op.task_key]
+				if mapping_data then
+					mapping_data.google_updated = update_op.google_task.updated or os.date("!%Y-%m-%dT%H:%M:%SZ")
+					mapping_data.last_synced = os.date("!%Y-%m-%dT%H:%M:%SZ")
+				end
+				utils.notify(string.format("Updated completion status in markdown: %s", update_op.google_task.title), vim.log.levels.INFO)
+			end
+			op_complete(success, err_msg)
 		end)
 	end
 end
@@ -504,7 +667,7 @@ function M.write_google_tasks_to_markdown(tasks, markdown_dir, list_name, callba
 	-- Write to file
 	file = io.open(filename, "w")
 	if not file then
-		vim.notify("Failed to write to " .. filename, vim.log.levels.ERROR)
+		utils.notify("Failed to write to " .. filename, vim.log.levels.ERROR)
 		if callback then
 			callback(false)
 		end
@@ -516,7 +679,188 @@ function M.write_google_tasks_to_markdown(tasks, markdown_dir, list_name, callba
 	end
 	file:close()
 
-	vim.notify(string.format("Wrote %d new task(s) to %s", new_task_count, filename))
+	utils.notify(string.format("Wrote %d new task(s) to %s", new_task_count, filename))
+	if callback then
+		callback(true)
+	end
+end
+
+---Updates the completion status of a task in markdown
+---@param file_path string Path to the markdown file
+---@param line_number number Line number of the task (1-indexed)
+---@param completed boolean New completion status
+---@param callback function Callback when complete (success, err_msg)
+function M.update_task_completion_in_markdown(file_path, line_number, completed, callback)
+	-- Read file
+	local file = io.open(file_path, "r")
+	if not file then
+		if callback then
+			callback(false, "Failed to open file: " .. file_path)
+		end
+		return
+	end
+
+	local lines = {}
+	for line in file:lines() do
+		table.insert(lines, line)
+	end
+	file:close()
+
+	-- Update the checkbox on the specified line
+	if line_number < 1 or line_number > #lines then
+		if callback then
+			callback(false, "Invalid line number: " .. line_number)
+		end
+		return
+	end
+
+	local line = lines[line_number]
+	local checkbox_pattern = "^(%s*%-%s+%[)[%sx](%])"
+
+	if not line:match(checkbox_pattern) then
+		if callback then
+			callback(false, "Line is not a task: " .. line)
+		end
+		return
+	end
+
+	-- Replace checkbox
+	local new_checkbox = completed and "x" or " "
+	lines[line_number] = line:gsub(checkbox_pattern, "%1" .. new_checkbox .. "%2", 1)
+
+	-- Write back to file
+	file = io.open(file_path, "w")
+	if not file then
+		if callback then
+			callback(false, "Failed to open file for writing: " .. file_path)
+		end
+		return
+	end
+
+	for _, l in ipairs(lines) do
+		file:write(l .. "\n")
+	end
+	file:close()
+
+	if callback then
+		callback(true)
+	end
+end
+
+---Deletes a task from markdown file
+---@param file_path string Path to the markdown file
+---@param line_number number Line number of the task to delete (1-indexed)
+---@param callback function Callback when complete (success, err_msg)
+function M.delete_task_from_markdown(file_path, line_number, callback)
+	-- Read file
+	local file = io.open(file_path, "r")
+	if not file then
+		if callback then
+			callback(false, "Failed to open file: " .. file_path)
+		end
+		return
+	end
+
+	local lines = {}
+	for line in file:lines() do
+		table.insert(lines, line)
+	end
+	file:close()
+
+	if line_number < 1 or line_number > #lines then
+		if callback then
+			callback(false, "Invalid line number: " .. line_number)
+		end
+		return
+	end
+
+	-- Get task line and its indentation
+	local task_line = lines[line_number]
+	local task_indent = task_line:match("^(%s*)")
+	local task_indent_level = math.floor(#task_indent / 2)
+
+	-- Mark lines for deletion: the task line, its description, and all subtasks
+	local to_delete = {}
+	to_delete[line_number] = true
+
+	-- Scan forward to find description lines and subtasks
+	local i = line_number + 1
+	while i <= #lines do
+		local line = lines[i]
+
+		-- Empty line
+		if line:match("^%s*$") then
+			-- Check next line to see if it's still part of this task's content
+			if i + 1 <= #lines then
+				local next_line = lines[i + 1]
+				local next_indent = next_line:match("^(%s*)")
+				local next_indent_level = math.floor(#next_indent / 2)
+
+				-- If next line is a task at same or lower level, stop
+				if next_line:match("^%s*%-%s+%[[ x]%]") and next_indent_level <= task_indent_level then
+					break
+				end
+
+				-- If next line is also empty, we've hit double empty line - stop
+				if next_line:match("^%s*$") then
+					break
+				end
+
+				-- Next line is indented content, continue
+				to_delete[i] = true
+			else
+				-- End of file
+				break
+			end
+		else
+			local line_indent = line:match("^(%s*)")
+			local line_indent_level = math.floor(#line_indent / 2)
+
+			-- Check if this is a task
+			if line:match("^%s*%-%s+%[[ x]%]") then
+				-- Task at same or lower level - stop
+				if line_indent_level <= task_indent_level then
+					break
+				end
+				-- Subtask (higher indent level) - delete it
+				to_delete[i] = true
+			else
+				-- Not a task - could be description
+				-- If indented more than or equal to task, it's part of this task
+				if line_indent_level > task_indent_level then
+					to_delete[i] = true
+				else
+					-- Less indented, not part of this task
+					break
+				end
+			end
+		end
+
+		i = i + 1
+	end
+
+	-- Create new lines array without deleted lines
+	local new_lines = {}
+	for idx, line in ipairs(lines) do
+		if not to_delete[idx] then
+			table.insert(new_lines, line)
+		end
+	end
+
+	-- Write back to file
+	file = io.open(file_path, "w")
+	if not file then
+		if callback then
+			callback(false, "Failed to open file for writing: " .. file_path)
+		end
+		return
+	end
+
+	for _, line in ipairs(new_lines) do
+		file:write(line .. "\n")
+	end
+	file:close()
+
 	if callback then
 		callback(true)
 	end
@@ -530,19 +874,19 @@ function M.sync_directory_with_google(callback)
 	-- Validate directory configuration
 	local valid, err = files.validate_markdown_dir()
 	if not valid then
-		vim.notify(err, vim.log.levels.ERROR)
+		utils.notify(err, vim.log.levels.ERROR)
 		if callback then
 			callback(false)
 		end
 		return
 	end
 
-	vim.notify("Starting 2-way sync: scanning markdown directory and fetching Google Tasks...")
+	utils.notify("Starting 2-way sync: scanning markdown directory and fetching Google Tasks...")
 
 	-- First, fetch all Google Task lists
 	api.get_task_lists(function(response, api_err)
 		if api_err then
-			vim.notify("Failed to fetch Google Task lists: " .. api_err, vim.log.levels.ERROR)
+			utils.notify("Failed to fetch Google Task lists: " .. api_err, vim.log.levels.ERROR)
 			if callback then
 				callback(false)
 			end
@@ -595,7 +939,7 @@ function M.sync_directory_with_google(callback)
 			list_count = list_count + 1
 		end
 
-		vim.notify(string.format(
+		utils.notify(string.format(
 			"Found %d markdown task(s) in %d file(s), %d Google list(s), syncing %d total list(s)",
 			total_markdown_tasks,
 			#all_file_data,
@@ -619,7 +963,7 @@ function M.sync_multiple_lists(lists_data, markdown_dir, callback)
 	end
 
 	if #list_names == 0 then
-		vim.notify("No task lists to sync")
+		utils.notify("No task lists to sync")
 		if callback then
 			callback(true)
 		end
@@ -645,7 +989,7 @@ function M.sync_multiple_lists(lists_data, markdown_dir, callback)
 			mapping.save(shared_map)
 
 			if #errors > 0 then
-				vim.notify(
+				utils.notify(
 					string.format("Sync completed with errors: %s", table.concat(errors, ", ")),
 					vim.log.levels.WARN
 				)
@@ -653,7 +997,7 @@ function M.sync_multiple_lists(lists_data, markdown_dir, callback)
 					callback(false)
 				end
 			else
-				vim.notify(string.format("Successfully synced %d task list(s)!", total_lists))
+				utils.notify(string.format("Successfully synced %d task list(s)!", total_lists))
 				if callback then
 					callback(true)
 				end
@@ -674,7 +1018,7 @@ end
 ---@param shared_map table Shared mapping data (to prevent race conditions)
 ---@param callback function Callback when list is synced
 function M.sync_single_list(list_name, list_data, markdown_dir, shared_map, callback)
-	vim.notify(string.format("Syncing list: %s", list_name))
+	utils.notify(string.format("Syncing list: %s", list_name))
 
 	-- Get or create the list in Google Tasks
 	api.get_or_create_list(list_name, function(list, err)
@@ -698,7 +1042,7 @@ function M.sync_single_list(list_name, list_data, markdown_dir, shared_map, call
 			end
 
 			local google_tasks = google_response.items or {}
-			vim.notify(string.format("List '%s': %d markdown tasks, %d Google tasks", list_name, #list_data.tasks, #google_tasks))
+			utils.notify(string.format("List '%s': %d markdown tasks, %d Google tasks", list_name, #list_data.tasks, #google_tasks))
 
 			-- Perform 2-way sync for this list
 			M.perform_twoway_sync({

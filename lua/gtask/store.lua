@@ -3,6 +3,7 @@
 local M = {}
 
 local config = require("gtask.config")
+local utils = require("gtask.utils")
 
 --- Get the path where tokens are stored
 --- Uses Neovim's data directory for cross-platform compatibility
@@ -17,20 +18,20 @@ end
 ---@return boolean # True if save was successful, false otherwise
 function M.save_tokens(tokens)
 	if not tokens then
-		vim.notify("Cannot save nil tokens", vim.log.levels.ERROR)
+		utils.notify("Cannot save nil tokens", vim.log.levels.ERROR)
 		return false
 	end
 
 	local path = get_token_path()
 	local file = io.open(path, "w")
 	if not file then
-		vim.notify("Failed to open token file for writing: " .. path, vim.log.levels.ERROR)
+		utils.notify("Failed to open token file for writing: " .. path, vim.log.levels.ERROR)
 		return false
 	end
 
 	local success, encoded = pcall(vim.fn.json_encode, tokens)
 	if not success then
-		vim.notify("Failed to encode tokens as JSON", vim.log.levels.ERROR)
+		utils.notify("Failed to encode tokens as JSON", vim.log.levels.ERROR)
 		file:close()
 		return false
 	end
@@ -59,7 +60,7 @@ function M.load_tokens()
 
 	local success, tokens = pcall(vim.fn.json_decode, content)
 	if not success then
-		vim.notify("Failed to decode stored tokens", vim.log.levels.WARN)
+		utils.notify("Failed to decode stored tokens", vim.log.levels.WARN)
 		return nil
 	end
 
@@ -79,7 +80,7 @@ function M.clear_tokens()
 	local path = get_token_path()
 	local success, err = os.remove(path)
 	if not success then
-		vim.notify("Failed to clear tokens: " .. (err or "unknown error"), vim.log.levels.WARN)
+		utils.notify("Failed to clear tokens: " .. (err or "unknown error"), vim.log.levels.WARN)
 		return false
 	end
 	return true

@@ -4,6 +4,7 @@ local M = {}
 
 local config = require("gtask.config")
 local store = require("gtask.store")
+local utils = require("gtask.utils")
 local Job = require("plenary.job")
 
 --- Get proxy backend URL from config (dynamically to respect setup() changes)
@@ -18,14 +19,14 @@ end
 ---@param callback function Callback called with new tokens or nil on error
 local function refresh_tokens(refresh_token, callback)
 	if not refresh_token or refresh_token == "" then
-		vim.notify("No refresh token available", vim.log.levels.ERROR)
+		utils.notify("No refresh token available", vim.log.levels.ERROR)
 		if callback then
 			callback(nil, "No refresh token")
 		end
 		return
 	end
 
-	vim.notify("Access token expired. Refreshing via proxy...")
+	utils.notify("Access token expired. Refreshing via proxy...")
 
 	-- Prepare request body for proxy
 	local request_body = vim.fn.json_encode({
@@ -48,7 +49,7 @@ local function refresh_tokens(refresh_token, callback)
 					local success, new_tokens = pcall(vim.fn.json_decode, response)
 
 					if not success or not new_tokens or not new_tokens.access_token then
-						vim.notify("Invalid response from token refresh", vim.log.levels.ERROR)
+						utils.notify("Invalid response from token refresh", vim.log.levels.ERROR)
 						if callback then
 							callback(nil, "Invalid refresh response")
 						end
@@ -61,13 +62,13 @@ local function refresh_tokens(refresh_token, callback)
 					end
 
 					store.save_tokens(new_tokens)
-					vim.notify("Tokens refreshed successfully.")
+					utils.notify("Tokens refreshed successfully.")
 					if callback then
 						callback(new_tokens)
 					end
 				else
 					local error_msg = table.concat(j:stderr_result())
-					vim.notify("Error refreshing tokens: " .. error_msg, vim.log.levels.ERROR)
+					utils.notify("Error refreshing tokens: " .. error_msg, vim.log.levels.ERROR)
 					if callback then
 						callback(nil, error_msg)
 					end
@@ -83,7 +84,7 @@ end
 ---@param callback function Callback called with response data or error
 local function request(opts, callback)
 	if not opts or not opts.url then
-		vim.notify("Invalid request options", vim.log.levels.ERROR)
+		utils.notify("Invalid request options", vim.log.levels.ERROR)
 		if callback then
 			callback(nil, "Invalid request options")
 		end
@@ -93,7 +94,7 @@ local function request(opts, callback)
 	local tokens = store.load_tokens()
 	if not tokens or not tokens.access_token then
 		vim.schedule(function()
-			vim.notify("Not authenticated. Please run :GtaskAuth", vim.log.levels.ERROR)
+			utils.notify("Not authenticated. Please run :GtaskAuth", vim.log.levels.ERROR)
 		end)
 		if callback then
 			callback(nil, "Not authenticated")
@@ -201,7 +202,7 @@ end
 ---@param callback function Callback called with tasks array or error
 function M.get_tasks(task_list_id, callback)
 	if not task_list_id or task_list_id == "" then
-		vim.notify("Task list ID is required", vim.log.levels.ERROR)
+		utils.notify("Task list ID is required", vim.log.levels.ERROR)
 		if callback then
 			callback(nil, "Task list ID is required")
 		end
@@ -220,7 +221,7 @@ end
 ---@param callback function Callback called with created task or error
 function M.create_task(task_list_id, task_data, callback)
 	if not task_list_id or task_list_id == "" then
-		vim.notify("Task list ID is required", vim.log.levels.ERROR)
+		utils.notify("Task list ID is required", vim.log.levels.ERROR)
 		if callback then
 			callback(nil, "Task list ID is required")
 		end
@@ -228,7 +229,7 @@ function M.create_task(task_list_id, task_data, callback)
 	end
 
 	if not task_data or not task_data.title then
-		vim.notify("Task data with title is required", vim.log.levels.ERROR)
+		utils.notify("Task data with title is required", vim.log.levels.ERROR)
 		if callback then
 			callback(nil, "Task data with title is required")
 		end
@@ -250,7 +251,7 @@ end
 ---@param callback function Callback called with updated task or error
 function M.update_task(task_list_id, task_id, task_data, callback)
 	if not task_list_id or task_list_id == "" then
-		vim.notify("Task list ID is required", vim.log.levels.ERROR)
+		utils.notify("Task list ID is required", vim.log.levels.ERROR)
 		if callback then
 			callback(nil, "Task list ID is required")
 		end
@@ -258,7 +259,7 @@ function M.update_task(task_list_id, task_id, task_data, callback)
 	end
 
 	if not task_id or task_id == "" then
-		vim.notify("Task ID is required", vim.log.levels.ERROR)
+		utils.notify("Task ID is required", vim.log.levels.ERROR)
 		if callback then
 			callback(nil, "Task ID is required")
 		end
@@ -266,7 +267,7 @@ function M.update_task(task_list_id, task_id, task_data, callback)
 	end
 
 	if not task_data then
-		vim.notify("Task data is required", vim.log.levels.ERROR)
+		utils.notify("Task data is required", vim.log.levels.ERROR)
 		if callback then
 			callback(nil, "Task data is required")
 		end
@@ -308,7 +309,7 @@ end
 ---@param callback function Callback called with created list or error
 function M.create_task_list(list_name, callback)
 	if not list_name or list_name == "" then
-		vim.notify("List name is required", vim.log.levels.ERROR)
+		utils.notify("List name is required", vim.log.levels.ERROR)
 		if callback then
 			callback(nil, "List name is required")
 		end
@@ -328,7 +329,7 @@ end
 ---@param callback function Callback called with list object
 function M.get_or_create_list(list_name, callback)
 	if not list_name or list_name == "" then
-		vim.notify("List name is required", vim.log.levels.ERROR)
+		utils.notify("List name is required", vim.log.levels.ERROR)
 		if callback then
 			callback(nil, "List name is required")
 		end
@@ -347,7 +348,7 @@ function M.get_or_create_list(list_name, callback)
 			callback(list)
 		else
 			-- List doesn't exist, create it
-			vim.notify(string.format("Creating new task list: %s", list_name))
+			utils.notify(string.format("Creating new task list: %s", list_name))
 			M.create_task_list(list_name, callback)
 		end
 	end)
@@ -362,7 +363,7 @@ end
 ---@param callback function Callback called with created task or error
 function M.create_task_with_parent(task_list_id, task_data, parent_id, previous_id, callback)
 	if not task_list_id or task_list_id == "" then
-		vim.notify("Task list ID is required", vim.log.levels.ERROR)
+		utils.notify("Task list ID is required", vim.log.levels.ERROR)
 		if callback then
 			callback(nil, "Task list ID is required")
 		end
@@ -370,7 +371,7 @@ function M.create_task_with_parent(task_list_id, task_data, parent_id, previous_
 	end
 
 	if not task_data or not task_data.title then
-		vim.notify("Task data with title is required", vim.log.levels.ERROR)
+		utils.notify("Task data with title is required", vim.log.levels.ERROR)
 		if callback then
 			callback(nil, "Task data with title is required")
 		end
@@ -406,7 +407,7 @@ end
 ---@param callback function Callback called with success or error
 function M.delete_task(task_list_id, task_id, callback)
 	if not task_list_id or task_list_id == "" then
-		vim.notify("Task list ID is required", vim.log.levels.ERROR)
+		utils.notify("Task list ID is required", vim.log.levels.ERROR)
 		if callback then
 			callback(nil, "Task list ID is required")
 		end
@@ -414,7 +415,7 @@ function M.delete_task(task_list_id, task_id, callback)
 	end
 
 	if not task_id or task_id == "" then
-		vim.notify("Task ID is required", vim.log.levels.ERROR)
+		utils.notify("Task ID is required", vim.log.levels.ERROR)
 		if callback then
 			callback(nil, "Task ID is required")
 		end

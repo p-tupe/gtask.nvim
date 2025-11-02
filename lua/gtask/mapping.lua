@@ -2,6 +2,8 @@
 ---Manages the mapping between markdown tasks and Google Task IDs
 local M = {}
 
+local utils = require("gtask.utils")
+
 --- Get the path to the mapping file
 ---@return string Path to the mapping file
 local function get_mapping_file_path()
@@ -19,7 +21,7 @@ function M.load()
 		-- File doesn't exist, return empty structure
 		return {
 			lists = {}, -- list_name -> google_list_id
-			tasks = {}, -- task_key -> {google_id, list_name, file_path, position_path, parent_key}
+			tasks = {}, -- task_key -> {google_id, list_name, file_path, position_path, parent_key, google_updated, deleted_from_google, last_synced}
 		}
 	end
 
@@ -35,7 +37,7 @@ function M.load()
 
 	local success, decoded = pcall(vim.fn.json_decode, content)
 	if not success then
-		vim.notify("Warning: Failed to parse mapping file, creating new one", vim.log.levels.WARN)
+		utils.notify("Warning: Failed to parse mapping file, creating new one", vim.log.levels.WARN)
 		return {
 			lists = {},
 			tasks = {},
@@ -56,13 +58,13 @@ function M.save(mapping)
 	local file = io.open(file_path, "w")
 
 	if not file then
-		vim.notify("Error: Failed to open mapping file for writing", vim.log.levels.ERROR)
+		utils.notify("Error: Failed to open mapping file for writing", vim.log.levels.ERROR)
 		return false
 	end
 
 	local success, encoded = pcall(vim.fn.json_encode, mapping)
 	if not success then
-		vim.notify("Error: Failed to encode mapping data", vim.log.levels.ERROR)
+		utils.notify("Error: Failed to encode mapping data", vim.log.levels.ERROR)
 		file:close()
 		return false
 	end
@@ -121,14 +123,18 @@ end
 ---@param file_path string The file path
 ---@param position_path string The tree position path
 ---@param parent_key string|nil The parent task key if this is a subtask
-function M.register_task(mapping, task_key, google_id, list_name, file_path, position_path, parent_key)
+---@param google_updated string|nil The Google Task's last update timestamp (RFC3339)
+function M.register_task(mapping, task_key, google_id, list_name, file_path, position_path, parent_key, google_updated)
+	local now = os.date("!%Y-%m-%dT%H:%M:%SZ")
 	mapping.tasks[task_key] = {
 		google_id = google_id,
 		list_name = list_name,
 		file_path = file_path,
 		position_path = position_path,
 		parent_key = parent_key,
-		last_synced = os.date("!%Y-%m-%dT%H:%M:%SZ"),
+		google_updated = google_updated or now,  -- Use provided timestamp or current time
+		deleted_from_google = false,
+		last_synced = now,
 	}
 end
 
@@ -150,6 +156,17 @@ end
 ---@param task_key string The task key to remove
 function M.remove_task(mapping, task_key)
 	mapping.tasks[task_key] = nil
+end
+
+--- Mark a task as deleted from Google Tasks
+---@param mapping table The mapping data
+---@param task_key string The task key
+function M.mark_deleted_from_google(mapping, task_key)
+	local task_data = mapping.tasks[task_key]
+	if task_data then
+		task_data.deleted_from_google = true
+		task_data.last_synced = os.date("!%Y-%m-%dT%H:%M:%SZ")
+	end
 end
 
 --- Clean up orphaned tasks for a specific list

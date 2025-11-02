@@ -41,6 +41,23 @@ local defaults = {
 		---@type string[]
 		ignore_patterns = {},
 	},
+
+	--- Sync behavior configuration
+	sync = {
+		--- Keep completed tasks in markdown even after deleting from Google Tasks
+		--- When true: completed tasks remain in markdown as historical records
+		--- When false: completed tasks are deleted from markdown when deleted from Google
+		---@type boolean
+		keep_completed_in_markdown = true,
+	},
+
+	--- Logging verbosity level
+	--- Controls which log messages are shown
+	--- "error" (default): Only show errors
+	--- "warn": Show warnings and errors
+	--- "info": Show all messages including info, warnings, and errors
+	---@type string
+	verbosity = "error",
 }
 
 --- Current configuration
@@ -82,6 +99,24 @@ function M.setup(opts)
 		end
 		config.markdown.ignore_patterns = opts.ignore_patterns
 	end
+
+	if opts.keep_completed_in_markdown ~= nil then
+		if type(opts.keep_completed_in_markdown) ~= "boolean" then
+			error("keep_completed_in_markdown must be a boolean")
+		end
+		config.sync.keep_completed_in_markdown = opts.keep_completed_in_markdown
+	end
+
+	if opts.verbosity then
+		if type(opts.verbosity) ~= "string" then
+			error("verbosity must be a string")
+		end
+		local valid_levels = { error = true, warn = true, info = true }
+		if not valid_levels[opts.verbosity] then
+			error("verbosity must be one of: 'error', 'warn', 'info'. Got: " .. opts.verbosity)
+		end
+		config.verbosity = opts.verbosity
+	end
 end
 
 --- Get current configuration
@@ -90,10 +125,17 @@ function M.get()
 	return config
 end
 
+--- Reset configuration to defaults (useful for testing)
+function M.reset()
+	config = vim.deepcopy(defaults)
+end
+
 -- Expose configuration fields for backward compatibility
 M.scopes = config.scopes
 M.proxy = config.proxy
 M.storage = config.storage
 M.markdown = config.markdown
+M.sync = config.sync
+M.verbosity = config.verbosity
 
 return M
