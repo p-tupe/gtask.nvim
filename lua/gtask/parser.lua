@@ -22,6 +22,7 @@ end
 ---@field line_number integer The line number where this task appears
 ---@field indent_level integer The indentation level (0 for top-level tasks)
 ---@field parent_index integer|nil Index of parent task if this is a subtask
+---@field position_path string|nil Tree position path like "[0]" or "[0].[1]"
 
 ---Parses markdown lines to extract tasks with hierarchy and descriptions
 ---@param lines string[] Array of markdown lines
@@ -43,6 +44,9 @@ function M.parse_tasks(lines)
 
 	-- Build parent-child relationships
 	M.build_hierarchy(tasks)
+
+	-- Build position paths for stable task identification
+	M.build_position_paths(tasks)
 
 	return tasks
 end
@@ -182,6 +186,39 @@ function M.build_hierarchy(tasks)
 
 		-- Add this task to the stack as a potential parent
 		table.insert(parent_stack, { indent_level = task.indent_level, index = i })
+	end
+end
+
+---Builds tree position paths for all tasks based on parent_index relationships
+---Converts hierarchical parent-child relationships into stable position strings
+---like "[0]", "[0].[1]", "[0].[1].[2]" that are resilient to line number changes
+---@param tasks Task[] Array of tasks with parent_index set
+function M.build_position_paths(tasks)
+	-- Track child counts per parent to assign positions
+	local child_counts = {} -- Maps parent_index (or "top") to next child position
+
+	for i, task in ipairs(tasks) do
+		if task.parent_index then
+			-- This is a child task
+			local parent = tasks[task.parent_index]
+			if not parent or not parent.position_path then
+				-- Parent should have been processed first (array order guarantees this)
+				error("Parent task position not set for task: " .. task.title)
+			end
+
+			-- Get child position (how many children this parent already has)
+			local child_pos = child_counts[task.parent_index] or 0
+			child_counts[task.parent_index] = child_pos + 1
+
+			-- Build position path: parent's path + "." + child position
+			task.position_path = parent.position_path .. ".[" .. child_pos .. "]"
+		else
+			-- Top-level task
+			local top_level_pos = child_counts["top"] or 0
+			child_counts["top"] = top_level_pos + 1
+
+			task.position_path = "[" .. top_level_pos .. "]"
+		end
 	end
 end
 

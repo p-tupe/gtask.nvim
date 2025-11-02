@@ -71,9 +71,9 @@ All options are optional. Heh.
 
 ```lua
 require("gtask").setup({
-  markdown_dir = "~/gtask.nvim",              -- Where to store markdown files
-  proxy_url = "https://app.priteshtupe.com/gtask",  -- OAuth proxy (default is fine)
-  ignore_patterns = { "archive", "draft.md" },    -- Files/dirs to skip
+  markdown_dir = "~/gtask.nvim",                     -- Where to store markdown files
+  proxy_url = "https://app.priteshtupe.com/gtask",   -- OAuth proxy (default is fine)
+  ignore_patterns = { "archive", "draft.md" },       -- Files/dirs to skip
 })
 ```
 
@@ -84,9 +84,8 @@ require("gtask").setup({
 
 ## Known Issues & Limitations
 
-- **No conflict resolution**: Simultaneous edits are not detected. Markdown is always considered source of truth during sync.
-- **Manual sync only**: No automatic background sync. You must run `:GtaskSync` manually. Or use an autocommand on entering directory.
-- **Task matching**: Uses position-based tracking with some recovery heuristics, but some weird issues like duplicates or new tasks could crop up in edge cases.
+- **Task matching**: Uses **positional matching** list->task1,task2->subtask1,subtask2... Optimal use would be to simply add a new task at the end, so other tasks aren't changed. If you move a task to a different line or insert one in between, it will end up deleting/recreating the tasks that have had their positions changed.
+- **File Rename**: Current behaviour for task file renames is undefined.
 - Please open an issue if you find more... :)
 
 ## Wiki
@@ -184,7 +183,6 @@ Tasks use standard markdown checkbox syntax!**Format Rules:**
 
 **Important Notes:**
 
-- Tasks are matched by title. If you rename a task in markdown, it will be treated as a new task.
 - Filenames are auto-normalized (e.g., "My Shopping List" → `my-shopping-list.md`) to prevent duplicates
 - The H1 heading in the file preserves the original list name from Google Tasks
 - The markdown directory is created automatically if it doesn't exist
