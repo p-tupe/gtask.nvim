@@ -163,13 +163,6 @@ The `files.lua` module handles markdown file operations:
 - `api.create_task_list()` - Creates new task list
 - `api.get_or_create_list()` - Convenience function combining find + create
 
-**Limitations**:
-
-- Subtask parent relationships are parsed but not synced to Google Tasks
-- Title-based matching (renaming tasks creates duplicates)
-- No conflict resolution for simultaneous edits (markdown wins)
-- Due dates are one-way (markdown → Google) for now
-
 ## Configuration
 
 The plugin can be configured via the `setup()` function in `lua/gtask/init.lua`:
@@ -238,35 +231,14 @@ lua test_pkce:*
 
 ## Current Limitations
 
-### 1. No Subtask Parent Relationships in Sync
+### 1. Position-Based Tracking Sensitivity
 
-- **Issue**: The parser correctly detects subtasks in markdown (indented tasks) and builds parent-child relationships via `parent_index`
-- **Current behavior**: All tasks are created as top-level tasks in Google Tasks, losing the hierarchy
-- **Impact**: Parent-child structure visible in markdown is flattened when synced to Google Tasks
-- **Note**: See "Implementing Subtask Support" section below for solution details
+- **Issue**: Task matching uses tree-based position paths (e.g., `[0]`, `[2][1]`)
+- **Current behavior**: When mapping exists, tasks are matched by position. When no mapping exists, falls back to title-based matching
+- **Impact**: Manually reordering or inserting tasks can cause position shifts, though the sync handles this gracefully
+- **Mitigation**: Title-based fallback prevents duplicates; sync reconciles position changes automatically
 
-### 2. Title-Based Matching Only
-
-- **Issue**: Tasks are matched between markdown and Google Tasks by exact title (case-sensitive)
-- **Current behavior**: Renaming a task in markdown creates a new task in Google Tasks; the old task remains
-- **Impact**: Can lead to duplicate tasks if titles are modified
-- **Workaround**: Delete old tasks manually in Google Tasks after renaming in markdown
-
-### 3. No Deletion Sync
-
-- **Issue**: Removing a task from markdown does not delete it from Google Tasks
-- **Current behavior**: Deleted tasks will reappear in your markdown files on the next sync (written back from Google)
-- **Impact**: Tasks must be deleted manually in both locations
-- **Workaround**: Delete in Google Tasks first, then remove from markdown
-
-### 4. One-Way Conflict Resolution
-
-- **Issue**: When a task exists in both locations with different content, markdown always wins
-- **Current behavior**: No conflict detection, notification, or user choice
-- **Impact**: Changes made in Google Tasks app/web may be overwritten by markdown version on next sync
-- **Note**: This is by design - markdown is considered the source of truth
-
-### 5. Manual Sync Only
+### 2. Manual Sync Only
 
 - **Issue**: No automatic or scheduled synchronization
 - **Current behavior**: User must run `:GtaskSync` command manually
@@ -295,323 +267,64 @@ lua test_pkce:*
 
 ### 9. App isn't verified on Google
 
-## Implementing Subtask Support
+## Subtask Implementation
 
-This section documents how to implement parent-child task relationships (limitation #1) using the Google Tasks API.
+Subtask parent-child relationships are **fully implemented** and synced bidirectionally between markdown and Google Tasks.
 
-### API Support for Subtasks
+### How It Works
 
-The Google Tasks API v1 **fully supports** parent-child task relationships through:
+**Markdown Format**:
+Subtasks are detected by indentation (minimum 2 spaces more than parent):
 
-- **Query parameter approach**: Use `parent` parameter when creating tasks
-- **Move method**: Relocate existing tasks to establish/change parent relationships
-- **Read-only `parent` field**: Task objects include parent ID in responses
+```markdown
+- [ ] Parent task
+  - [ ] Subtask (2 spaces)
+    - [ ] Nested subtask (4 spaces)
+      Description (4+ spaces)
+```
 
-### Required API Changes
+**Parsing** (`parser.lua`):
+- Indentation level calculated: `indent_level = math.floor(#indent_str / 2)`
+- Stack-based hierarchy building finds nearest less-indented task as parent
+- Sets `parent_index` field on each subtask
 
-#### New Functions in `api.lua`
+**Syncing** (`sync.lua`):
+The sync uses a **two-pass creation strategy**:
 
-**1. Create Task with Parent**
+**Phase 1: Top-level tasks**
+- Creates all tasks without `parent_index` first
+- Stores created task IDs in `task_id_map[task_index]`
+- Waits for ALL top-level tasks to complete
 
+**Phase 2: Subtasks with parent references**
+- For each subtask, looks up `parent_id = task_id_map[parent_index]`
+- Calls `api.create_task_with_parent(list_id, task_data, parent_id, nil, callback)`
+- Registers parent_key in mapping
+
+**API Support** (`api.lua`):
 ```lua
---- Create a task with optional parent and positioning
----@param task_list_id string The task list ID
----@param task_data table Task data (title, notes, status, due)
----@param parent_id string|nil Parent task ID (nil for top-level)
----@param previous_id string|nil Previous sibling task ID for ordering
----@param callback function Callback with response or error
 function M.create_task_with_parent(task_list_id, task_data, parent_id, previous_id, callback)
-	local url = string.format("https://tasks.googleapis.com/tasks/v1/lists/%s/tasks", task_list_id)
+  local url = string.format("https://tasks.googleapis.com/tasks/v1/lists/%s/tasks", task_list_id)
 
-	-- Build query parameters
-	local query_params = {}
-	if parent_id and parent_id ~= "" then
-		table.insert(query_params, "parent=" .. parent_id)
-	end
-	if previous_id and previous_id ~= "" then
-		table.insert(query_params, "previous=" .. previous_id)
-	end
+  -- Add parent query parameter if provided
+  if parent_id and parent_id ~= "" then
+    url = url .. "?parent=" .. parent_id
+  end
 
-	if #query_params > 0 then
-		url = url .. "?" .. table.concat(query_params, "&")
-	end
-
-	request({
-		method = "POST",
-		url = url,
-		body = task_data,
-	}, callback)
+  request({ method = "POST", url = url, body = task_data }, callback)
 end
 ```
 
-**2. Move Task (Future Enhancement)**
+**Mapping Tracking**:
+- Parent-child relationships stored in `gtask_mappings.json`
+- `parent_key` field links subtask to parent
+- Position paths (e.g., `[0][2]`) track nested structure
 
-```lua
---- Move a task to change parent or position
----@param task_list_id string The task list ID
----@param task_id string The task to move
----@param parent_id string|nil New parent ID (nil for top-level)
----@param previous_id string|nil New previous sibling ID
----@param callback function Callback with response or error
-function M.move_task(task_list_id, task_id, parent_id, previous_id, callback)
-	local url = string.format(
-		"https://tasks.googleapis.com/tasks/v1/lists/%s/tasks/%s/move",
-		task_list_id,
-		task_id
-	)
+### Current Limitations
 
-	local query_params = {}
-	if parent_id then
-		table.insert(query_params, "parent=" .. parent_id)
-	end
-	if previous_id then
-		table.insert(query_params, "previous=" .. previous_id)
-	end
-
-	if #query_params > 0 then
-		url = url .. "?" .. table.concat(query_params, "&")
-	end
-
-	request({
-		method = "POST",
-		url = url,
-	}, callback)
-end
-```
-
-### Sync Logic Changes
-
-#### Two-Pass Creation Strategy in `sync.lua`
-
-Replace the current `create_google_task()` approach with a two-pass system:
-
-**Pass 1: Create Top-Level Tasks**
-
-```lua
--- Create all tasks without parents first
-local task_id_map = {} -- Maps markdown task index to Google task ID
-
-for i, mdtask in ipairs(markdown_tasks) do
-	if not mdtask.parent_index then
-		-- Top-level task
-		M.create_google_task(mdtask, task_list_id, function(response, err)
-			if response and response.id then
-				task_id_map[i] = response.id
-			end
-		end)
-	end
-end
-```
-
-**Pass 2: Create Subtasks with Parent IDs**
-
-```lua
--- Wait for Pass 1 to complete, then create subtasks
-for i, mdtask in ipairs(markdown_tasks) do
-	if mdtask.parent_index then
-		local parent_id = task_id_map[mdtask.parent_index]
-		if parent_id then
-			-- Create subtask with parent reference
-			api.create_task_with_parent(
-				task_list_id,
-				{
-					title = mdtask.title,
-					notes = mdtask.description,
-					status = mdtask.completed and "completed" or "needsAction",
-					due = mdtask.due_date,
-				},
-				parent_id,
-				nil, -- previous_id for ordering (future enhancement)
-				callback
-			)
-		else
-			-- Parent wasn't created - log error or create as top-level
-			vim.notify("Warning: Parent task not found for " .. mdtask.title, vim.log.levels.WARN)
-		end
-	end
-end
-```
-
-#### Updated `create_google_task()` Function
-
-Modify to support parent parameter:
-
-```lua
-function M.create_google_task(mdtask, task_list_id, parent_id, callback)
-	local google_task = {
-		title = mdtask.title,
-		status = mdtask.completed and "completed" or "needsAction",
-	}
-
-	if mdtask.description then
-		google_task.notes = mdtask.description
-	end
-
-	if mdtask.due_date then
-		google_task.due = mdtask.due_date
-	end
-
-	-- Use new API function with parent support
-	api.create_task_with_parent(task_list_id, google_task, parent_id, nil, callback)
-end
-```
-
-### API Restrictions and Validation
-
-**Must validate before creating subtasks:**
-
-1. **2,000 Subtask Limit**: Count children per parent
-
-   ```lua
-   local children_count = {}
-   for _, task in ipairs(tasks) do
-       if task.parent_index then
-           children_count[task.parent_index] = (children_count[task.parent_index] or 0) + 1
-           if children_count[task.parent_index] > 2000 then
-               -- Error: too many subtasks
-           end
-       end
-   end
-   ```
-
-2. **No Assigned Tasks as Parents**: Google Tasks assigned from Chat/Docs cannot be parents (check `assignmentInfo` field)
-
-3. **No Completed+Hidden as Nested**: Tasks with both `completed=true` and `hidden=true` cannot have parent
-
-4. **No Repeating Tasks**: Tasks with `recurrence` field cannot be parents or subtasks
-
-### Edge Cases to Handle
-
-**1. Orphaned Subtasks**
-
-```lua
--- Markdown has subtask but parent task is missing
-if mdtask.parent_index and not tasks[mdtask.parent_index] then
-	vim.notify("Orphaned subtask: " .. mdtask.title, vim.log.levels.WARN)
-	-- Create as top-level task instead
-	mdtask.parent_index = nil
-end
-```
-
-**2. Circular References**
-
-```lua
--- Should never happen with proper indentation parsing, but validate anyway
-local function has_circular_ref(tasks, task_index, visited)
-	if visited[task_index] then return true end
-	visited[task_index] = true
-
-	local parent_idx = tasks[task_index].parent_index
-	if parent_idx then
-		return has_circular_ref(tasks, parent_idx, visited)
-	end
-	return false
-end
-```
-
-**3. Deep Nesting**
-
-```lua
--- Calculate maximum depth
-local function get_depth(tasks, task_index, depth)
-	local parent_idx = tasks[task_index].parent_index
-	if not parent_idx then return depth end
-	return get_depth(tasks, parent_idx, depth + 1)
-end
-
--- Warn if very deep (Google supports it but may have performance impact)
-if get_depth(tasks, i, 0) > 10 then
-	vim.notify("Very deep nesting detected (>10 levels)", vim.log.levels.WARN)
-end
-```
-
-**4. Sibling Ordering**
-
-```lua
--- Preserve order of subtasks under same parent
-local siblings = {}
-for _, task in ipairs(tasks) do
-	if task.parent_index == parent_idx then
-		table.insert(siblings, task)
-	end
-end
-
--- Create siblings in order using `previous` parameter
-local previous_id = nil
-for _, sibling in ipairs(siblings) do
-	api.create_task_with_parent(list_id, sibling_data, parent_id, previous_id, function(resp)
-		previous_id = resp.id
-	end)
-end
-```
-
-### Example API Requests
-
-**Creating a parent task:**
-
-```
-POST https://tasks.googleapis.com/tasks/v1/lists/MTIzNDU2Nzg5/tasks
-Authorization: Bearer {access_token}
-Content-Type: application/json
-
-{
-  "title": "Plan project",
-  "notes": "Define scope and timeline"
-}
-
-Response:
-{
-  "id": "parent-abc123",
-  "title": "Plan project",
-  "status": "needsAction"
-}
-```
-
-**Creating a subtask:**
-
-```
-POST https://tasks.googleapis.com/tasks/v1/lists/MTIzNDU2Nzg5/tasks?parent=parent-abc123
-Authorization: Bearer {access_token}
-Content-Type: application/json
-
-{
-  "title": "Define scope",
-  "status": "needsAction"
-}
-
-Response:
-{
-  "id": "subtask-xyz789",
-  "title": "Define scope",
-  "parent": "parent-abc123",
-  "status": "needsAction"
-}
-```
-
-### Implementation Roadmap
-
-**Phase 1: Basic Subtask Creation**
-
-1. Add `create_task_with_parent()` to api.lua
-2. Implement two-pass sync in sync.lua
-3. Handle basic parent-child relationships
-4. Test with simple 2-level hierarchies
-
-**Phase 2: Robust Error Handling**
-
-1. Add validation for orphaned subtasks
-2. Implement circular reference detection
-3. Add depth warnings
-4. Handle API quota limits
-
-**Phase 3: Advanced Features**
-
-1. Implement sibling ordering with `previous` parameter
-2. Add `move_task()` for reorganizing existing hierarchies
-3. Support updating parent relationships on re-sync
-4. Sync parent changes from Google Tasks back to markdown
-
-**Note**: This implementation assumes tasks are matched by title (current limitation #2). For a more robust solution that handles renames and deletions, consider implementing a task ID mapping system (see user discussion above).
+- **No sibling ordering**: The `previous` parameter is not used yet, so subtask order may not be preserved
+- **Parent changes**: Moving a subtask to a different parent in markdown creates a new task instead of using `move` API
+- **Deep nesting**: No depth limit validation (Google Tasks supports unlimited depth)
 
 ## Security Notes
 

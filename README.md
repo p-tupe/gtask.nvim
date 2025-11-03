@@ -1,7 +1,7 @@
 <br />
 <div style="width:100%" align="center"> <img src="./logo.svg" alt="gtask.nvim Image"> </div>
 <h1 align="center">gtask.nvim</h1>
-<p align="center"><strong>Google Tasks in Neovim (Under Construction)</strong></p>
+<p align="center"><strong>Google Tasks in Neovim!</strong></p>
 <p align="center">
 <img alt="GitHub tag (latest SemVer)" src="https://img.shields.io/github/v/tag/p-tupe/gtask.nvim" >
 <a href="https://github.com/p-tupe/gtask.nvim/blob/main/LICENSE"><img alt="GitHub license" src="https://img.shields.io/github/license/p-tupe/gtask.nvim"></a>
@@ -72,7 +72,7 @@ require("gtask").setup({
 1. **Sync**: Run `:GtaskSync` to sync with Google Tasks
 1. Done!
 
-You may now update tasks in either markdown_dir or Google Tasks and :GtaskSync to synchronize them. An autocommand may be set-up to autosync on changes in markdown_dir.
+You may now update tasks in either markdown_dir or Google Tasks and :GtaskSync to synchronize them.
 
 ### Task Format
 
@@ -96,6 +96,7 @@ You may now update tasks in either markdown_dir or Google Tasks and :GtaskSync t
 
 ## Known Issues
 
+- **Duplicate Tasks** : When synced on more than one machince (or after extensive re-ordering), Google Tasks may sometimes have duplicates.
 - **Task matching**: Uses **positional matching** list→task1,task2→subtask1,subtask2... Optimal use would be to simply add a new task at the end, so other tasks aren't changed. If you move a task to a different line or insert one in between, it will end up deleting/recreating the tasks that have had their positions changed.
 - **File Rename**: Current behaviour for task file renames is undefined.
 - Please open an issue if you find more... :)

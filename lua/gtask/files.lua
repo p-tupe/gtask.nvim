@@ -165,14 +165,22 @@ function M.parse_all_markdown_files()
 	end
 
 	local files = M.find_markdown_files()
+	utils.notify(string.format("Discovered %d markdown files in directory", #files), vim.log.levels.INFO)
+
 	local all_data = {}
 
 	for _, file_path in ipairs(files) do
 		local data, parse_err = M.parse_markdown_file(file_path)
 		if data and #data.tasks > 0 then
+			utils.notify(
+				string.format("Parsed '%s': %d tasks (list: %s)", data.file_name, #data.tasks, data.list_name or "none"),
+				vim.log.levels.INFO
+			)
 			table.insert(all_data, data)
 		elseif parse_err then
 			utils.notify("Error parsing " .. file_path .. ": " .. parse_err, vim.log.levels.WARN)
+		else
+			utils.notify(string.format("Skipped '%s': no tasks found", file_path), vim.log.levels.INFO)
 		end
 	end
 

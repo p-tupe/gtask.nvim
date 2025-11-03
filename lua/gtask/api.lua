@@ -190,17 +190,54 @@ local function request(opts, callback)
 	make_request(tokens.access_token)
 end
 
---- Get all task lists for the authenticated user
---- Retrieves all task lists from Google Tasks API
+--- Get all task lists for the authenticated user (with pagination)
+--- Retrieves all task lists from Google Tasks API, automatically handling pagination
 ---@param callback function Callback called with task lists array or error
 function M.get_task_lists(callback)
-	request({
-		url = "https://tasks.googleapis.com/tasks/v1/users/@me/lists",
-	}, callback)
+	local all_lists = {}
+
+	-- Recursive function to fetch all pages
+	local function fetch_page(page_token)
+		local url = "https://tasks.googleapis.com/tasks/v1/users/@me/lists?maxResults=100"
+
+		if page_token then
+			url = url .. "&pageToken=" .. page_token
+		end
+
+		request({
+			url = url,
+		}, function(response, err)
+			if err then
+				callback(nil, err)
+				return
+			end
+
+			-- Add lists from this page
+			local page_lists = response.items or {}
+			for _, list in ipairs(page_lists) do
+				table.insert(all_lists, list)
+			end
+
+			-- Check if there are more pages
+			if response.nextPageToken then
+				utils.notify(
+					string.format("Fetching next page of task lists (fetched %d so far)...", #all_lists),
+					vim.log.levels.INFO
+				)
+				fetch_page(response.nextPageToken)
+			else
+				-- No more pages, return all lists
+				callback({ items = all_lists })
+			end
+		end)
+	end
+
+	-- Start fetching from the first page
+	fetch_page(nil)
 end
 
---- Get all tasks from a specific task list
---- Retrieves all tasks from the specified task list
+--- Get all tasks from a specific task list (with pagination)
+--- Retrieves all tasks from the specified task list, automatically handling pagination
 ---@param task_list_id string The ID of the task list to retrieve tasks from
 ---@param callback function Callback called with tasks array or error
 function M.get_tasks(task_list_id, callback)
@@ -212,9 +249,49 @@ function M.get_tasks(task_list_id, callback)
 		return
 	end
 
-	request({
-		url = string.format("https://tasks.googleapis.com/tasks/v1/lists/%s/tasks", task_list_id),
-	}, callback)
+	local all_tasks = {}
+
+	-- Recursive function to fetch all pages
+	local function fetch_page(page_token)
+		local url = string.format(
+			"https://tasks.googleapis.com/tasks/v1/lists/%s/tasks?showCompleted=true&showHidden=true&maxResults=100",
+			task_list_id
+		)
+
+		if page_token then
+			url = url .. "&pageToken=" .. page_token
+		end
+
+		request({
+			url = url,
+		}, function(response, err)
+			if err then
+				callback(nil, err)
+				return
+			end
+
+			-- Add tasks from this page
+			local page_tasks = response.items or {}
+			for _, task in ipairs(page_tasks) do
+				table.insert(all_tasks, task)
+			end
+
+			-- Check if there are more pages
+			if response.nextPageToken then
+				utils.notify(
+					string.format("Fetching next page of tasks (fetched %d so far)...", #all_tasks),
+					vim.log.levels.INFO
+				)
+				fetch_page(response.nextPageToken)
+			else
+				-- No more pages, return all tasks
+				callback({ items = all_tasks })
+			end
+		end)
+	end
+
+	-- Start fetching from the first page
+	fetch_page(nil)
 end
 
 --- Create a new task in the specified task list
@@ -295,14 +372,23 @@ function M.find_list_by_name(list_name, callback)
 		end
 
 		local lists = response.items or {}
+
+		-- Debug: Log all available list names
+		local list_names = {}
 		for _, list in ipairs(lists) do
+			table.insert(list_names, string.format("'%s'", list.title))
 			if list.title == list_name then
+				utils.notify(string.format("Found existing list: %s", list_name), vim.log.levels.INFO)
 				callback(list)
 				return
 			end
 		end
 
-		-- List not found
+		-- List not found - log available lists for debugging
+		utils.notify(
+			string.format("List '%s' not found. Available lists: %s", list_name, table.concat(list_names, ", ")),
+			vim.log.levels.INFO
+		)
 		callback(nil)
 	end)
 end
@@ -323,7 +409,18 @@ function M.create_task_list(list_name, callback)
 		method = "POST",
 		url = "https://tasks.googleapis.com/tasks/v1/users/@me/lists",
 		body = { title = list_name },
-	}, callback)
+	}, function(response, err)
+		if err then
+			utils.notify(string.format("Failed to create list '%s': %s", list_name, err), vim.log.levels.ERROR)
+			callback(nil, err)
+		else
+			utils.notify(
+				string.format("Successfully created list '%s' with ID: %s", list_name, response.id or "unknown"),
+				vim.log.levels.INFO
+			)
+			callback(response, nil)
+		end
+	end)
 end
 
 --- Get or create a task list by name

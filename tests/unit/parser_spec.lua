@@ -52,6 +52,41 @@ describe("parser module", function()
 			assert.is_nil(due_date)
 		end)
 
+		it("should parse malformed checkbox as empty string (lenient)", function()
+			-- Missing space in checkbox - parser allows this
+			local indent, checkbox, title = parser.parse_task_line("- [] Buy milk")
+			assert.equals(0, indent)
+			assert.equals("", checkbox) -- Empty string, not space
+			assert.equals("Buy milk", title)
+		end)
+
+		it("should NOT parse lines without dash prefix", function()
+			local _, checkbox, title = parser.parse_task_line("[ ] Not a task")
+			assert.is_nil(checkbox)
+			assert.is_nil(title)
+
+			_, checkbox, title = parser.parse_task_line("* [ ] Wrong bullet")
+			assert.is_nil(checkbox)
+			assert.is_nil(title)
+		end)
+
+		it("should handle invalid due dates gracefully", function()
+			-- Invalid date pattern doesn't match, so whole thing becomes title
+			local indent, checkbox, title, due_date = parser.parse_task_line("- [ ] Task | not-a-date")
+			assert.equals(0, indent)
+			assert.equals(" ", checkbox)
+			assert.equals("Task | not-a-date", title) -- Parser keeps pipe in title when date doesn't match
+			assert.is_nil(due_date)
+		end)
+
+		it("should enforce valid date format YYYY-MM-DD", function()
+			-- Only dates matching the pattern are parsed
+			local _, _, title, due_date = parser.parse_task_line("- [ ] Task | 2025-01-15")
+			assert.equals("Task", title)
+			assert.is_not_nil(due_date)
+			assert.equals("2025-01-15T00:00:00.000Z", due_date)
+		end)
+
 		it("should parse completed task", function()
 			local indent, checkbox, title = parser.parse_task_line("- [x] Buy milk")
 
@@ -468,6 +503,124 @@ describe("parser module", function()
 			assert.equals("[0].[1]", tasks[3].position_path)
 			assert.equals("[0].[2]", tasks[4].position_path)
 			assert.equals("[0].[3]", tasks[5].position_path)
+		end)
+
+		it("should create unique position paths for all tasks", function()
+			local tasks = {
+				{ title = "A", parent_index = nil },
+				{ title = "A1", parent_index = 1 },
+				{ title = "A2", parent_index = 1 },
+				{ title = "B", parent_index = nil },
+				{ title = "B1", parent_index = 4 },
+				{ title = "B1a", parent_index = 5 },
+			}
+
+			parser.build_position_paths(tasks)
+
+			-- Collect all position paths
+			local paths = {}
+			for _, task in ipairs(tasks) do
+				table.insert(paths, task.position_path)
+			end
+
+			-- Check uniqueness
+			local seen = {}
+			for _, path in ipairs(paths) do
+				assert.is_nil(seen[path], "Position path " .. path .. " must be unique")
+				seen[path] = true
+			end
+
+			-- Verify count
+			assert.equals(6, #paths)
+		end)
+
+		it("should assign position paths that reflect hierarchy depth", function()
+			local tasks = {
+				{ title = "L0", parent_index = nil },
+				{ title = "L1", parent_index = 1 },
+				{ title = "L2", parent_index = 2 },
+				{ title = "L3", parent_index = 3 },
+				{ title = "L4", parent_index = 4 },
+			}
+
+			parser.build_position_paths(tasks)
+
+			-- Count dots in path should equal depth
+			local function count_depth(path)
+				local _, count = path:gsub("%.", "")
+				return count
+			end
+
+			assert.equals(0, count_depth(tasks[1].position_path), "L0 should have depth 0")
+			assert.equals(1, count_depth(tasks[2].position_path), "L1 should have depth 1")
+			assert.equals(2, count_depth(tasks[3].position_path), "L2 should have depth 2")
+			assert.equals(3, count_depth(tasks[4].position_path), "L3 should have depth 3")
+			assert.equals(4, count_depth(tasks[5].position_path), "L4 should have depth 4")
+		end)
+	end)
+
+	describe("edge cases and validation", function()
+		it("should handle empty task list", function()
+			local tasks = parser.parse_tasks({})
+			assert.equals(0, #tasks)
+		end)
+
+		it("should handle file with only non-task content", function()
+			local lines = {
+				"# Just a heading",
+				"",
+				"Some paragraph text",
+				"",
+				"More text",
+			}
+
+			local tasks = parser.parse_tasks(lines)
+			assert.equals(0, #tasks)
+		end)
+
+		it("should handle very long task titles", function()
+			local long_title = string.rep("A", 500)
+			local line = "- [ ] " .. long_title
+			local indent, checkbox, title = parser.parse_task_line(line)
+
+			assert.equals(0, indent)
+			assert.equals(" ", checkbox)
+			assert.equals(long_title, title)
+			assert.equals(500, #title)
+		end)
+
+		it("should handle task with empty title", function()
+			local indent, checkbox = parser.parse_task_line("- [ ] ")
+
+			assert.equals(0, indent)
+			assert.equals(" ", checkbox)
+			-- May be empty or whitespace, implementation-dependent
+			-- Main thing is it shouldn't crash
+		end)
+
+		it("should handle maximum realistic nesting (10 levels)", function()
+			local tasks = {}
+			for i = 1, 10 do
+				table.insert(tasks, {
+					title = "Level " .. i,
+					indent_level = i - 1,
+					parent_index = i > 1 and (i - 1) or nil,
+				})
+			end
+
+			parser.build_hierarchy(tasks)
+			parser.build_position_paths(tasks)
+
+			-- Verify hierarchy is correctly built
+			for i = 2, 10 do
+				assert.equals(i - 1, tasks[i].parent_index)
+			end
+
+			-- Verify position paths increase in depth
+			for i = 1, 10 do
+				local _, dot_count = tasks[i].position_path:gsub("%.", "")
+				assert.equals(i - 1, dot_count, "Task at level " .. i .. " should have " .. (i - 1) .. " dots")
+			end
 		end)
 	end)
 end)
