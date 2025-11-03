@@ -186,39 +186,35 @@ function M.perform_twoway_sync(sync_state, callback)
 		local matched_gtask = nil
 
 		-- Skip if task was deleted from Google (don't recreate)
-		if mapping_data and mapping_data.deleted_from_google then
-			-- Task was deleted from Google, don't sync
-			goto continue
-		end
-
-		if google_id and google_by_id[google_id] then
-			-- Found exact match by ID (from mapping)
-			matched_gtask = google_by_id[google_id]
-		elseif not mapping_data then
-			-- No mapping exists - try to match by title as fallback
-			local normalized_md_title = mdtask.title:match("^%s*(.-)%s*$")
-			if google_by_title[normalized_md_title] then
-				matched_gtask = google_by_title[normalized_md_title]
-				google_id = matched_gtask.id -- Set google_id from matched task
-				utils.notify(
-					string.format("Matched task by title (no mapping): '%s'", mdtask.title),
-					vim.log.levels.INFO
-				)
+		-- Use negative condition instead of goto continue for Lua 5.1 compatibility
+		if not (mapping_data and mapping_data.deleted_from_google) then
+			if google_id and google_by_id[google_id] then
+				-- Found exact match by ID (from mapping)
+				matched_gtask = google_by_id[google_id]
+			elseif not mapping_data then
+				-- No mapping exists - try to match by title as fallback
+				local normalized_md_title = mdtask.title:match("^%s*(.-)%s*$")
+				if google_by_title[normalized_md_title] then
+					matched_gtask = google_by_title[normalized_md_title]
+					google_id = matched_gtask.id -- Set google_id from matched task
+					utils.notify(
+						string.format("Matched task by title (no mapping): '%s'", mdtask.title),
+						vim.log.levels.INFO
+					)
+				end
 			end
+
+			table.insert(md_task_keys, task_key)
+			md_task_keys_set[task_key] = true
+			table.insert(all_md_tasks_with_keys, {
+				task = mdtask,
+				key = task_key,
+				task_index = i, -- Store array index for parent-child mapping
+				google_id = google_id, -- Will be set by title match if no mapping exists
+				matched_gtask = matched_gtask,
+				mapping_data = mapping_data,
+			})
 		end
-
-		table.insert(md_task_keys, task_key)
-		md_task_keys_set[task_key] = true
-		table.insert(all_md_tasks_with_keys, {
-			task = mdtask,
-			key = task_key,
-			task_index = i, -- Store array index for parent-child mapping
-			google_id = google_id, -- Will be set by title match if no mapping exists
-			matched_gtask = matched_gtask,
-			mapping_data = mapping_data,
-		})
-
-		::continue::
 	end
 
 	-- Detect tasks deleted from markdown (exist in mapping but not in current markdown)

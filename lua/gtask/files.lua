@@ -90,22 +90,18 @@ function M.find_markdown_files()
 				break
 			end
 
-			-- Check if this should be ignored
-			if should_ignore(name, type == "directory") then
-				goto continue
+			-- Check if this should be ignored (use negative condition for Lua 5.1 compatibility)
+			if not should_ignore(name, type == "directory") then
+				local full_path = path .. "/" .. name
+
+				if type == "directory" then
+					-- Recursively scan subdirectories
+					scan_dir(full_path)
+				elseif type == "file" and name:match("%.md$") then
+					-- Add markdown files (only .md files)
+					table.insert(files, full_path)
+				end
 			end
-
-			local full_path = path .. "/" .. name
-
-			if type == "directory" then
-				-- Recursively scan subdirectories
-				scan_dir(full_path)
-			elseif type == "file" and name:match("%.md$") then
-				-- Add markdown files (only .md files)
-				table.insert(files, full_path)
-			end
-
-			::continue::
 		end
 	end
 
