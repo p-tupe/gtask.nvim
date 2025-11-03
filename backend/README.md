@@ -10,18 +10,12 @@ A secure OAuth proxy service for gtask.nvim plugin that handles Google OAuth cre
 - `POST /auth/refresh` - Refresh expired access tokens
 - `GET /health` - Health check and status
 
-## Development
-
-```bash
-# Add your credentials
-cp google-auth-credentials.example.json google-auth-credentials.json
-
-# Run server
-go run main.go
-```
-
 ## Deployment
 
 ```bash
+git clone https://github.com/p-tupe/gtask.nvim.git
+cd backend
+# Add your credentials
+cp google-auth-credentials.example.json google-auth-credentials.json
 docker compose up
 ```

@@ -19,6 +19,9 @@ describe("sync module - hierarchy preservation", function()
 			-- Normalized filename: "Test List" -> "test-list.md"
 			local test_file = "/tmp/test-list.md"
 
+			-- Clean up any existing file first (avoid CI state issues)
+			os.remove(test_file)
+
 			-- Google Tasks with parent-child relationship
 			local google_tasks = {
 				{
@@ -126,6 +129,9 @@ describe("sync module - hierarchy preservation", function()
 			-- Normalized filename: "Desc List" -> "desc-list.md"
 			local test_file = "/tmp/desc-list.md"
 
+			-- Clean up any existing file first (avoid CI state issues)
+			os.remove(test_file)
+
 			local google_tasks = {
 				{
 					id = "task1",
@@ -210,6 +216,9 @@ describe("sync module - hierarchy preservation", function()
 			local sync = require("gtask.sync")
 			-- Normalized filename: "Multi List" -> "multi-list.md"
 			local test_file = "/tmp/multi-list.md"
+
+			-- Clean up any existing file first (avoid CI state issues)
+			os.remove(test_file)
 
 			local google_tasks = {
 				{

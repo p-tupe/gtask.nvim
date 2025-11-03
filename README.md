@@ -39,6 +39,8 @@ https://github.com/user-attachments/assets/fd17810e-3a4e-4bdd-b3ae-3467d245cf5d
 require("gtask").setup()
 ```
 
+> Always take backups!
+
 ## Configuration
 
 All options are optional. Heh.
