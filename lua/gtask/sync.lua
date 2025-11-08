@@ -145,7 +145,20 @@ function M.update_google_task(mdtask, gtask, task_list_id, callback)
 	end)
 end
 
----Performs 2-way sync between markdown and Google Tasks (position-based with recovery)
+---Performs 2-way sync between markdown and Google Tasks
+---
+---Sync flow:
+---  1. Match tasks by ID (from mapping) or title (fallback)
+---  2. Detect deletions (tasks in mapping but not in current markdown)
+---  3. Build sync operations (creates, updates, deletes)
+---  4. Execute operations and update mappings
+---
+---Key behaviors:
+---  - Markdown is source of truth for most changes (description, due date, etc.)
+---  - Completion status uses timestamps to resolve conflicts
+---  - Title-based matching creates mappings to enable future deletion detection
+---  - Deleted task IDs are marked to prevent re-adding them
+---
 ---@param sync_state table State containing tasks and configuration
 ---@param callback function Callback when sync is complete
 function M.perform_twoway_sync(sync_state, callback)
@@ -155,15 +168,14 @@ function M.perform_twoway_sync(sync_state, callback)
 	local markdown_dir = sync_state.markdown_dir
 	local list_name = sync_state.list_name
 
-	-- Use shared mapping data (to prevent race conditions across multiple list syncs)
+	-- Use shared mapping data (prevents race conditions when syncing multiple lists)
 	local map = sync_state.shared_map or mapping.load()
 
-	-- Index Google tasks by ID and title for quick lookup
+	-- Index Google tasks for efficient lookups during matching
 	local google_by_id = {}
 	local google_by_title = {}
 	for _, gtask in ipairs(google_tasks) do
 		google_by_id[gtask.id] = gtask
-		-- Normalize title for matching (trim whitespace)
 		local normalized_title = gtask.title:match("^%s*(.-)%s*$")
 		google_by_title[normalized_title] = gtask
 	end
@@ -185,18 +197,19 @@ function M.perform_twoway_sync(sync_state, callback)
 		local google_id = mapping_data and mapping_data.google_id or nil
 		local matched_gtask = nil
 
-		-- Skip if task was deleted from Google (don't recreate)
-		-- Use negative condition instead of goto continue for Lua 5.1 compatibility
+		-- Skip tasks that were previously deleted from Google (don't recreate them)
+		-- Note: Using negative condition for Lua 5.1 compatibility (no goto/continue)
 		if not (mapping_data and mapping_data.deleted_from_google) then
 			if google_id and google_by_id[google_id] then
-				-- Found exact match by ID (from mapping)
+				-- Preferred: Match by Google Task ID from our mapping
 				matched_gtask = google_by_id[google_id]
 			elseif not mapping_data then
-				-- No mapping exists - try to match by title as fallback
+				-- Fallback: Match by title when no mapping exists
+				-- This handles cases where mappings were lost or tasks were manually added
 				local normalized_md_title = mdtask.title:match("^%s*(.-)%s*$")
 				if google_by_title[normalized_md_title] then
 					matched_gtask = google_by_title[normalized_md_title]
-					google_id = matched_gtask.id -- Set google_id from matched task
+					google_id = matched_gtask.id
 					utils.notify(
 						string.format("Matched task by title (no mapping): '%s'", mdtask.title),
 						vim.log.levels.INFO
@@ -234,50 +247,62 @@ function M.perform_twoway_sync(sync_state, callback)
 		end
 	end
 
-	-- Build operations based on exact matching results
+	-- Build sync operations (creates, updates, deletes)
 	local operations = {
-		to_google = {},
-		to_markdown = {},
-		delete_from_google = {},
-		delete_from_markdown = {},
+		to_google = {},        -- Tasks to create/update in Google
+		to_markdown = {},      -- Tasks to write to markdown
+		delete_from_google = {},   -- Tasks to delete from Google
+		delete_from_markdown = {}, -- Tasks to delete from markdown
 	}
+
+	-- Track which Google task IDs we've seen to avoid duplicate processing
 	local seen_google_ids = {}
 
+	-- Mark deleted tasks' IDs as seen to prevent them from being re-added
+	-- This fixes the issue where deleted tasks would be written back from Google
+	for _, deleted_item in ipairs(deleted_from_markdown) do
+		if deleted_item.google_id then
+			seen_google_ids[deleted_item.google_id] = true
+		end
+	end
+
+	-- Process each markdown task to determine what operations are needed
 	for _, item in ipairs(all_md_tasks_with_keys) do
-		-- Determine parent_key if this is a subtask
+		-- Build parent reference for subtasks (used in Google Tasks parent-child relationships)
 		local parent_key = nil
 		if item.task.parent_index and all_md_tasks_with_keys[item.task.parent_index] then
 			parent_key = all_md_tasks_with_keys[item.task.parent_index].key
 		end
 
 		if item.google_id then
+			-- Mark this Google task as processed
 			seen_google_ids[item.google_id] = true
 
 			if item.matched_gtask then
-				-- Task exists in both locations
+				-- Task exists in both markdown and Google - check if sync is needed
 				local needs_update = false
 				local update_direction = nil -- "to_google" or "to_markdown"
 
-				-- Check completion status conflict
+				-- Detect completion status conflicts (task checked/unchecked in both places)
 				local md_completed = item.task.completed
 				local g_completed = (item.matched_gtask.status == "completed")
 
 				if md_completed ~= g_completed then
-					-- Completion status conflict - use timestamps to resolve
+					-- Use timestamps to determine which change is newer
 					local google_updated = item.matched_gtask.updated
 					local mapping_google_updated = item.mapping_data and item.mapping_data.google_updated
 
 					if google_updated and mapping_google_updated and google_updated > mapping_google_updated then
-						-- Google was modified since last sync - Google wins
+						-- Google was modified after our last sync - Google wins
 						update_direction = "to_markdown"
 						needs_update = true
 					else
-						-- Markdown is newer or timestamps equal - Markdown wins
+						-- Markdown change is newer (or timestamps unavailable) - Markdown wins
 						update_direction = "to_google"
 						needs_update = true
 					end
 				elseif M.task_needs_update(item.task, item.matched_gtask) then
-					-- Other changes (description, due date, title)
+					-- Other changes detected (description, due date, title) - Markdown is source of truth
 					update_direction = "to_google"
 					needs_update = true
 				end
@@ -300,6 +325,22 @@ function M.perform_twoway_sync(sync_state, callback)
 							file_path = item.task.source_file_path,
 							position_path = item.task.position_path,
 						})
+					end
+				else
+					-- Tasks are in sync, but create mapping if missing
+					-- This handles title-matched tasks that don't have mappings yet
+					-- Without this, deleted tasks won't be detected on next sync
+					if not item.mapping_data then
+						mapping.register_task(
+							map,
+							item.key,
+							item.google_id,
+							list_name,
+							item.task.source_file_path or "",
+							item.task.position_path,
+							parent_key,
+							item.matched_gtask.updated or os.date("!%Y-%m-%dT%H:%M:%SZ")
+						)
 					end
 				end
 			else
@@ -354,14 +395,16 @@ function M.perform_twoway_sync(sync_state, callback)
 		end
 	end
 
-	-- Find Google tasks not in markdown (write them to markdown)
+	-- Find Google tasks that haven't been processed yet (new tasks from Google)
+	-- These will be written to markdown files
 	for _, gtask in ipairs(google_tasks) do
 		if not seen_google_ids[gtask.id] then
 			table.insert(operations.to_markdown, gtask)
 		end
 	end
 
-	-- Add delete operations for tasks deleted from markdown
+	-- Queue deletions for tasks that were removed from markdown
+	-- These tasks exist in our mapping but no longer in the markdown file
 	for _, deleted_item in ipairs(deleted_from_markdown) do
 		table.insert(operations.delete_from_google, {
 			google_id = deleted_item.google_id,
@@ -402,6 +445,11 @@ function M.perform_twoway_sync(sync_state, callback)
 end
 
 ---Executes 2-way sync operations with two-pass creation for parent-child relationships
+---
+---The two-pass approach ensures subtasks can reference their parent's Google Task ID:
+---  1. Create all top-level tasks first and store their IDs
+---  2. Create subtasks using parent IDs from step 1
+---
 ---@param operations table Operations to perform
 ---@param task_list_id string Google Tasks list ID
 ---@param markdown_dir string Markdown directory path
@@ -410,7 +458,8 @@ end
 ---@param md_task_keys table Array of current markdown task keys
 ---@param callback function Callback when complete
 function M.execute_twoway_sync(operations, task_list_id, markdown_dir, list_name, map, md_task_keys, callback)
-	-- Separate creates into updates, top-level creates, and subtask creates
+	-- Categorize operations: updates, top-level creates, and subtask creates
+	-- Subtasks must be created after their parents to get proper parent IDs
 	local updates = {}
 	local creates_toplevel = {}
 	local creates_subtasks = {}
@@ -420,8 +469,10 @@ function M.execute_twoway_sync(operations, task_list_id, markdown_dir, list_name
 			table.insert(updates, op)
 		elseif op.type == "create" then
 			if op.markdown_task.parent_index then
+				-- Subtask - needs parent ID, create in phase 2
 				table.insert(creates_subtasks, op)
 			else
+				-- Top-level task - create in phase 1
 				table.insert(creates_toplevel, op)
 			end
 		end
@@ -447,16 +498,19 @@ function M.execute_twoway_sync(operations, task_list_id, markdown_dir, list_name
 
 	local completed = 0
 	local errors = {}
-	local task_id_map = {} -- Maps markdown task index to Google task ID
+	-- Maps markdown task array index to its Google Task ID (for parent-child linking)
+	local task_id_map = {}
 
+	-- Callback invoked after each async operation completes
 	local function op_complete(success, err_msg)
 		completed = completed + 1
 		if not success and err_msg then
 			table.insert(errors, err_msg)
 		end
 
+		-- All operations complete - cleanup and finalize
 		if completed >= total_ops then
-			-- Clean up orphaned tasks (mapping will be saved at the top level after all lists sync)
+			-- Remove stale mappings for tasks that no longer exist in this list
 			local removed_count = mapping.cleanup_orphaned_tasks(map, list_name, md_task_keys)
 			if removed_count > 0 then
 				utils.notify(
@@ -464,7 +518,7 @@ function M.execute_twoway_sync(operations, task_list_id, markdown_dir, list_name
 					vim.log.levels.INFO
 				)
 			end
-			-- Note: mapping.save() is now called in sync_multiple_lists after all lists complete
+			-- Note: Final mapping.save() happens in sync_multiple_lists after all lists sync
 
 			if #errors > 0 then
 				utils.notify("Sync completed with errors: " .. table.concat(errors, ", "), vim.log.levels.WARN)
@@ -713,6 +767,7 @@ local function google_task_to_markdown_lines(gtask, indent_level)
 	-- Add due date if present (convert from RFC3339 to YYYY-MM-DD HH:MM or YYYY-MM-DD)
 	if gtask.due and gtask.due ~= "" then
 		-- RFC3339 format: "2025-01-15T14:30:00.000Z"
+		-- Note: Google Tasks API only stores dates, not times (time is always 00:00:00.000Z)
 		local date_part, time_part = gtask.due:match("(%d%d%d%d%-%d%d%-%d%d)T(%d%d:%d%d)")
 		if date_part then
 			task_line = task_line .. " | " .. date_part
