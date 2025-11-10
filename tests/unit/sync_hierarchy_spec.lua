@@ -11,6 +11,41 @@ describe("sync module - hierarchy preservation", function()
 		-- Load plenary mock
 		plenary_mock = require("tests.helpers.plenary_mock")
 		plenary_mock.setup()
+
+		-- Clean up any stale state from previous test runs (CI isolation)
+		-- This prevents tests from being affected by data from previous runs
+		local mapping_file = vim.fn.stdpath("data") .. "/gtask_mappings.json"
+		os.remove(mapping_file)
+
+		-- Clean up test files that might exist from previous runs
+		local test_files = {
+			"/tmp/test-list.md",
+			"/tmp/desc-list.md",
+			"/tmp/multi-list.md",
+		}
+		for _, file in ipairs(test_files) do
+			os.remove(file)
+		end
+
+		-- Unload sync module to ensure fresh state
+		package.loaded["gtask.sync"] = nil
+		package.loaded["gtask.mapping"] = nil
+	end)
+
+	after_each(function()
+		-- Clean up test files after each test
+		local test_files = {
+			"/tmp/test-list.md",
+			"/tmp/desc-list.md",
+			"/tmp/multi-list.md",
+		}
+		for _, file in ipairs(test_files) do
+			os.remove(file)
+		end
+
+		-- Clean up mapping file
+		local mapping_file = vim.fn.stdpath("data") .. "/gtask_mappings.json"
+		os.remove(mapping_file)
 	end)
 
 	describe("write_google_tasks_to_markdown with hierarchy", function()
@@ -18,15 +53,6 @@ describe("sync module - hierarchy preservation", function()
 			local sync = require("gtask.sync")
 			-- Normalized filename: "Test List" -> "test-list.md"
 			local test_file = "/tmp/test-list.md"
-
-			-- Clean up any existing file first (avoid CI state issues)
-			os.remove(test_file)
-			-- Verify file is gone
-			local check_file = io.open(test_file, "r")
-			if check_file then
-				check_file:close()
-				error("Failed to remove test file before test")
-			end
 
 			-- Google Tasks with parent-child relationship
 			local google_tasks = {
