@@ -441,7 +441,7 @@ function M.perform_twoway_sync(sync_state, callback)
 	)
 
 	-- Execute sync operations with mapping
-	M.execute_twoway_sync(operations, task_list_id, markdown_dir, list_name, map, md_task_keys, callback)
+	M.execute_twoway_sync(operations, task_list_id, markdown_dir, list_name, map, md_task_keys, markdown_tasks, callback)
 end
 
 ---Executes 2-way sync operations with two-pass creation for parent-child relationships
@@ -456,8 +456,9 @@ end
 ---@param list_name string Name of the task list
 ---@param map table Mapping data
 ---@param md_task_keys table Array of current markdown task keys
+---@param markdown_tasks table Array of markdown tasks for this list
 ---@param callback function Callback when complete
-function M.execute_twoway_sync(operations, task_list_id, markdown_dir, list_name, map, md_task_keys, callback)
+function M.execute_twoway_sync(operations, task_list_id, markdown_dir, list_name, map, md_task_keys, markdown_tasks, callback)
 	-- Categorize operations: updates, top-level creates, and subtask creates
 	-- Subtasks must be created after their parents to get proper parent IDs
 	local updates = {}
@@ -721,7 +722,13 @@ function M.execute_twoway_sync(operations, task_list_id, markdown_dir, list_name
 
 	-- Phase 4a: Write new tasks to markdown (single operation for all new tasks)
 	if #new_tasks_to_markdown > 0 then
-		M.write_google_tasks_to_markdown(new_tasks_to_markdown, markdown_dir, list_name, function(success)
+		-- Determine target file path: use existing file path if list has markdown tasks
+		local target_file_path = nil
+		if #markdown_tasks > 0 and markdown_tasks[1].source_file_path then
+			target_file_path = markdown_tasks[1].source_file_path
+		end
+
+		M.write_google_tasks_to_markdown(new_tasks_to_markdown, markdown_dir, list_name, target_file_path, function(success)
 			op_complete(success, success and nil or "Failed to write tasks to markdown")
 		end)
 	end
@@ -843,10 +850,17 @@ end
 ---@param tasks table[] Array of Google Tasks to write
 ---@param markdown_dir string Directory to write to
 ---@param list_name string Name of the task list
+---@param existing_file_path string|nil Existing file path for this list (if any)
 ---@param callback function Callback when complete
-function M.write_google_tasks_to_markdown(tasks, markdown_dir, list_name, callback)
-	local normalized_name = normalize_filename(list_name)
-	local filename = markdown_dir .. "/" .. normalized_name .. ".md"
+function M.write_google_tasks_to_markdown(tasks, markdown_dir, list_name, existing_file_path, callback)
+	-- Use existing file path if provided, otherwise create at root with normalized name
+	local filename
+	if existing_file_path and existing_file_path ~= "" then
+		filename = existing_file_path
+	else
+		local normalized_name = normalize_filename(list_name)
+		filename = markdown_dir .. "/" .. normalized_name .. ".md"
+	end
 
 	-- Load mapping to check if Google task IDs are already synced
 	local map = mapping.load()

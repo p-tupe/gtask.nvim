@@ -52,7 +52,7 @@ describe("sync module - hierarchy preservation", function()
 
 			-- Write tasks to file
 			local success = false
-			sync.write_google_tasks_to_markdown(google_tasks, "/tmp", "Test List", function(s)
+			sync.write_google_tasks_to_markdown(google_tasks, "/tmp", "Test List", nil, function(s)
 				success = s
 			end)
 
@@ -149,7 +149,7 @@ describe("sync module - hierarchy preservation", function()
 			}
 
 			local success = false
-			sync.write_google_tasks_to_markdown(google_tasks, "/tmp", "Desc List", function(s)
+			sync.write_google_tasks_to_markdown(google_tasks, "/tmp", "Desc List", nil, function(s)
 				success = s
 			end)
 
@@ -246,7 +246,7 @@ describe("sync module - hierarchy preservation", function()
 			}
 
 			local success = false
-			sync.write_google_tasks_to_markdown(google_tasks, "/tmp", "Multi List", function(s)
+			sync.write_google_tasks_to_markdown(google_tasks, "/tmp", "Multi List", nil, function(s)
 				success = s
 			end)
 
