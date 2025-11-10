@@ -21,6 +21,12 @@ describe("sync module - hierarchy preservation", function()
 
 			-- Clean up any existing file first (avoid CI state issues)
 			os.remove(test_file)
+			-- Verify file is gone
+			local check_file = io.open(test_file, "r")
+			if check_file then
+				check_file:close()
+				error("Failed to remove test file before test")
+			end
 
 			-- Google Tasks with parent-child relationship
 			local google_tasks = {
@@ -131,6 +137,12 @@ describe("sync module - hierarchy preservation", function()
 
 			-- Clean up any existing file first (avoid CI state issues)
 			os.remove(test_file)
+			-- Verify file is gone
+			local check_file = io.open(test_file, "r")
+			if check_file then
+				check_file:close()
+				error("Failed to remove test file before test")
+			end
 
 			local google_tasks = {
 				{
@@ -219,6 +231,12 @@ describe("sync module - hierarchy preservation", function()
 
 			-- Clean up any existing file first (avoid CI state issues)
 			os.remove(test_file)
+			-- Verify file is gone
+			local check_file = io.open(test_file, "r")
+			if check_file then
+				check_file:close()
+				error("Failed to remove test file before test")
+			end
 
 			local google_tasks = {
 				{

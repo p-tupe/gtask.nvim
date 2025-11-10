@@ -249,9 +249,9 @@ function M.perform_twoway_sync(sync_state, callback)
 
 	-- Build sync operations (creates, updates, deletes)
 	local operations = {
-		to_google = {},        -- Tasks to create/update in Google
-		to_markdown = {},      -- Tasks to write to markdown
-		delete_from_google = {},   -- Tasks to delete from Google
+		to_google = {}, -- Tasks to create/update in Google
+		to_markdown = {}, -- Tasks to write to markdown
+		delete_from_google = {}, -- Tasks to delete from Google
 		delete_from_markdown = {}, -- Tasks to delete from markdown
 	}
 
@@ -441,7 +441,16 @@ function M.perform_twoway_sync(sync_state, callback)
 	)
 
 	-- Execute sync operations with mapping
-	M.execute_twoway_sync(operations, task_list_id, markdown_dir, list_name, map, md_task_keys, markdown_tasks, callback)
+	M.execute_twoway_sync(
+		operations,
+		task_list_id,
+		markdown_dir,
+		list_name,
+		map,
+		md_task_keys,
+		markdown_tasks,
+		callback
+	)
 end
 
 ---Executes 2-way sync operations with two-pass creation for parent-child relationships
@@ -458,7 +467,16 @@ end
 ---@param md_task_keys table Array of current markdown task keys
 ---@param markdown_tasks table Array of markdown tasks for this list
 ---@param callback function Callback when complete
-function M.execute_twoway_sync(operations, task_list_id, markdown_dir, list_name, map, md_task_keys, markdown_tasks, callback)
+function M.execute_twoway_sync(
+	operations,
+	task_list_id,
+	markdown_dir,
+	list_name,
+	map,
+	md_task_keys,
+	markdown_tasks,
+	callback
+)
 	-- Categorize operations: updates, top-level creates, and subtask creates
 	-- Subtasks must be created after their parents to get proper parent IDs
 	local updates = {}
@@ -728,9 +746,15 @@ function M.execute_twoway_sync(operations, task_list_id, markdown_dir, list_name
 			target_file_path = markdown_tasks[1].source_file_path
 		end
 
-		M.write_google_tasks_to_markdown(new_tasks_to_markdown, markdown_dir, list_name, target_file_path, function(success)
-			op_complete(success, success and nil or "Failed to write tasks to markdown")
-		end)
+		M.write_google_tasks_to_markdown(
+			new_tasks_to_markdown,
+			markdown_dir,
+			list_name,
+			target_file_path,
+			function(success)
+				op_complete(success, success and nil or "Failed to write tasks to markdown")
+			end
+		)
 	end
 
 	-- Phase 4b: Update completion status in markdown (individual operations)
