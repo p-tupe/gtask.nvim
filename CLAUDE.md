@@ -138,11 +138,13 @@ The `files.lua` module handles markdown file operations:
      - Perform 2-way sync for that specific list
 
 3. **2-Way Sync Per List** (`perform_twoway_sync`):
-   - Compare markdown tasks vs Google tasks by title (exact match, case-sensitive)
+   - Compare markdown tasks vs Google tasks by ID (from mapping) or title (fallback)
    - Plan operations:
      - Tasks only in markdown → create in Google Tasks
      - Tasks only in Google → write to `[normalized-filename].md`
-     - Tasks in both with differences → update Google (markdown is source of truth)
+     - Tasks in both with differences → use timestamp comparison to determine winner:
+       - If Google's `updated` > mapping's `google_updated`: Google wins, update markdown
+       - Otherwise: Markdown wins, update Google
    - Execute operations in parallel (Google API calls + markdown file write)
 
 **Key functions**:

@@ -154,8 +154,10 @@ end
 ---  4. Execute operations and update mappings
 ---
 ---Key behaviors:
----  - Markdown is source of truth for most changes (description, due date, etc.)
----  - Completion status uses timestamps to resolve conflicts
+---  - Bidirectional sync: Uses Google Task's updated timestamp vs last_synced to determine winner
+---  - When Google was modified after last sync, Google wins (updates markdown)
+---  - When markdown was modified (or timestamps unavailable), markdown wins (updates Google)
+---  - All fields sync bidirectionally: title, description, completion status, due date
 ---  - Title-based matching creates mappings to enable future deletion detection
 ---  - Deleted task IDs are marked to prevent re-adding them
 ---
@@ -206,14 +208,35 @@ function M.perform_twoway_sync(sync_state, callback)
 			elseif not mapping_data then
 				-- Fallback: Match by title when no mapping exists
 				-- This handles cases where mappings were lost or tasks were manually added
+				-- IMPORTANT: Only match if parent relationships are compatible (both top-level)
 				local normalized_md_title = mdtask.title:match("^%s*(.-)%s*$")
-				if google_by_title[normalized_md_title] then
-					matched_gtask = google_by_title[normalized_md_title]
-					google_id = matched_gtask.id
-					utils.notify(
-						string.format("Matched task by title (no mapping): '%s'", mdtask.title),
-						vim.log.levels.INFO
-					)
+				local candidate_gtask = google_by_title[normalized_md_title]
+
+				if candidate_gtask then
+					-- Check parent relationship compatibility
+					local md_is_toplevel = not mdtask.parent_index
+					local g_is_toplevel = not candidate_gtask.parent or candidate_gtask.parent == ""
+
+					if md_is_toplevel == g_is_toplevel then
+						-- Both are top-level or both have parents - safe to match
+						matched_gtask = candidate_gtask
+						google_id = candidate_gtask.id
+						utils.notify(
+							string.format("Matched task by title (no mapping): '%s'", mdtask.title),
+							vim.log.levels.INFO
+						)
+					else
+						-- Parent relationship mismatch - don't match (treat as different tasks)
+						utils.notify(
+							string.format(
+								"Skipping title match for '%s': parent mismatch (md=%s, g=%s)",
+								mdtask.title,
+								md_is_toplevel and "top-level" or "subtask",
+								g_is_toplevel and "top-level" or "subtask"
+							),
+							vim.log.levels.INFO
+						)
+					end
 				end
 			end
 
@@ -283,28 +306,22 @@ function M.perform_twoway_sync(sync_state, callback)
 				local needs_update = false
 				local update_direction = nil -- "to_google" or "to_markdown"
 
-				-- Detect completion status conflicts (task checked/unchecked in both places)
-				local md_completed = item.task.completed
-				local g_completed = (item.matched_gtask.status == "completed")
+				-- Use timestamps to determine which version is newer for bidirectional sync
+				local google_updated = item.matched_gtask.updated
+				local mapping_google_updated = item.mapping_data and item.mapping_data.google_updated
 
-				if md_completed ~= g_completed then
-					-- Use timestamps to determine which change is newer
-					local google_updated = item.matched_gtask.updated
-					local mapping_google_updated = item.mapping_data and item.mapping_data.google_updated
-
+				-- Check if there are any differences between markdown and Google
+				if M.task_needs_update(item.task, item.matched_gtask) then
+					-- Changes detected - use timestamp comparison to determine direction
 					if google_updated and mapping_google_updated and google_updated > mapping_google_updated then
-						-- Google was modified after our last sync - Google wins
+						-- Google was modified after our last sync - Google wins for all fields
 						update_direction = "to_markdown"
 						needs_update = true
 					else
-						-- Markdown change is newer (or timestamps unavailable) - Markdown wins
+						-- Markdown change is newer (or timestamps unavailable) - Markdown wins for all fields
 						update_direction = "to_google"
 						needs_update = true
 					end
-				elseif M.task_needs_update(item.task, item.matched_gtask) then
-					-- Other changes detected (description, due date, title) - Markdown is source of truth
-					update_direction = "to_google"
-					needs_update = true
 				end
 
 				if needs_update then
@@ -319,11 +336,12 @@ function M.perform_twoway_sync(sync_state, callback)
 						})
 					else -- to_markdown
 						table.insert(operations.to_markdown, {
-							type = "update_completion",
+							type = "update_from_google",
 							google_task = item.matched_gtask,
 							task_key = item.key,
 							file_path = item.task.source_file_path,
 							position_path = item.task.position_path,
+							markdown_task = item.task, -- Keep reference to markdown task for comparison
 						})
 					end
 				else
@@ -423,7 +441,7 @@ function M.perform_twoway_sync(sync_state, callback)
 		return type(op) == "table" and not op.type
 	end, operations.to_markdown)
 	local updates_to_markdown = #vim.tbl_filter(function(op)
-		return type(op) == "table" and op.type == "update_completion"
+		return type(op) == "table" and op.type == "update_from_google"
 	end, operations.to_markdown)
 
 	utils.notify(
@@ -726,13 +744,13 @@ function M.execute_twoway_sync(
 	end
 
 	-- Phase 4: Sync to markdown
-	-- Separate new tasks from completion updates
+	-- Separate new tasks from field updates
 	local new_tasks_to_markdown = {}
-	local completion_updates = {}
+	local field_updates = {}
 
 	for _, op in ipairs(operations.to_markdown) do
-		if type(op) == "table" and op.type == "update_completion" then
-			table.insert(completion_updates, op)
+		if type(op) == "table" and op.type == "update_from_google" then
+			table.insert(field_updates, op)
 		else
 			table.insert(new_tasks_to_markdown, op)
 		end
@@ -757,13 +775,13 @@ function M.execute_twoway_sync(
 		)
 	end
 
-	-- Phase 4b: Update completion status in markdown (individual operations)
-	for _, update_op in ipairs(completion_updates) do
-		local is_completed = (update_op.google_task.status == "completed")
-		M.update_task_completion_by_position(
+	-- Phase 4b: Update tasks in markdown from Google (individual operations)
+	for _, update_op in ipairs(field_updates) do
+		M.update_task_from_google(
 			update_op.file_path,
 			update_op.position_path,
-			is_completed,
+			update_op.google_task,
+			update_op.markdown_task,
 			function(success, err_msg)
 				if success then
 					-- Update mapping with new Google timestamp
@@ -773,7 +791,7 @@ function M.execute_twoway_sync(
 						mapping_data.last_synced = os.date("!%Y-%m-%dT%H:%M:%SZ")
 					end
 					utils.notify(
-						string.format("Updated completion status in markdown: %s", update_op.google_task.title),
+						string.format("Updated task from Google: %s", update_op.google_task.title),
 						vim.log.levels.INFO
 					)
 				end
@@ -1099,6 +1117,139 @@ function M.update_task_completion_by_position(file_path, position_path, complete
 
 	-- Now update using the current line number
 	M.update_task_completion_in_markdown(file_path, target_task.line_number, completed, callback)
+end
+
+---Updates all fields of a task in markdown from Google Task data (bidirectional sync)
+---@param file_path string Path to the markdown file
+---@param position_path string Tree-based position path (e.g., "[0]", "[2][1]")
+---@param google_task table Google Task object with updated data
+---@param markdown_task table Current markdown task (for reference)
+---@param callback function Callback (success, err_msg)
+function M.update_task_from_google(file_path, position_path, google_task, markdown_task, callback)
+	-- Re-parse the file to get current task positions
+	local file = io.open(file_path, "r")
+	if not file then
+		if callback then
+			callback(false, "Failed to open file: " .. file_path)
+		end
+		return
+	end
+
+	local lines = {}
+	for line in file:lines() do
+		table.insert(lines, line)
+	end
+	file:close()
+
+	-- Parse tasks to find the one with matching position_path
+	local tasks = parser.parse_tasks(lines)
+	local target_task = nil
+
+	for _, task in ipairs(tasks) do
+		if task.position_path == position_path then
+			target_task = task
+			break
+		end
+	end
+
+	if not target_task then
+		if callback then
+			callback(false, string.format("Task with position %s not found in %s", position_path, file_path))
+		end
+		return
+	end
+
+	-- Build updated task line from Google Task data
+	local indent = string.rep("\t", target_task.indent_level or 0)
+	local checkbox = google_task.status == "completed" and "[x]" or "[ ]"
+	local title = google_task.title or target_task.title
+
+	-- Add due date if present (convert from RFC3339 to YYYY-MM-DD HH:MM or YYYY-MM-DD)
+	local due_str = ""
+	if google_task.due and google_task.due ~= "" then
+		-- RFC3339 format: "2025-01-15T14:30:00.000Z"
+		-- Note: Google Tasks API only stores dates, not times (time is always 00:00:00.000Z)
+		local date_part, time_part = google_task.due:match("(%d%d%d%d%-%d%d%-%d%d)T(%d%d:%d%d)")
+		if date_part then
+			due_str = " | " .. date_part
+			-- Only add time if it's not midnight (00:00)
+			if time_part and time_part ~= "00:00" then
+				due_str = due_str .. " " .. time_part
+			end
+		end
+	end
+
+	local new_task_line = indent .. "- " .. checkbox .. " " .. title .. due_str
+
+	-- Update the task line
+	lines[target_task.line_number] = new_task_line
+
+	-- Handle description update
+	local description = google_task.notes or ""
+
+	-- Find and remove old description lines
+	local desc_start = target_task.line_number + 1
+	local desc_end = desc_start - 1
+
+	-- Find the end of the current description
+	for i = desc_start, #lines do
+		local line = lines[i]
+		-- Stop if we hit another task, or a line with less/equal indentation that's not a description
+		if line:match("^%s*%-%s+%[") then
+			break -- Hit another task
+		elseif line:match("^%s*$") then
+			-- Empty line might be part of description or separator
+			desc_end = i
+		elseif line:match("^%s+%S") then
+			-- Indented content - part of description
+			desc_end = i
+		else
+			break -- Non-indented content, stop
+		end
+	end
+
+	-- Remove old description lines
+	if desc_end >= desc_start then
+		for i = desc_end, desc_start, -1 do
+			table.remove(lines, i)
+		end
+	end
+
+	-- Insert new description if present
+	if description ~= "" then
+		local desc_indent = indent .. "  "
+		local desc_lines = vim.split(description, "\n", { plain = true })
+
+		-- Insert blank line before description
+		table.insert(lines, target_task.line_number + 1, "")
+
+		-- Insert description lines
+		for i, desc_line in ipairs(desc_lines) do
+			if desc_line ~= "" then
+				table.insert(lines, target_task.line_number + 1 + i, desc_indent .. desc_line)
+			else
+				table.insert(lines, target_task.line_number + 1 + i, "")
+			end
+		end
+	end
+
+	-- Write back to file
+	local write_file = io.open(file_path, "w")
+	if not write_file then
+		if callback then
+			callback(false, "Failed to open file for writing: " .. file_path)
+		end
+		return
+	end
+
+	for _, line in ipairs(lines) do
+		write_file:write(line .. "\n")
+	end
+	write_file:close()
+
+	if callback then
+		callback(true, nil)
+	end
 end
 
 ---Deletes a task from markdown by position path (more reliable than line number)
