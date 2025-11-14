@@ -1,4 +1,4 @@
----Unit tests for mapping module
+---Unit tests for mapping module (UUID-based)
 describe("mapping module", function()
 	local mapping
 	local vim_mock
@@ -13,95 +13,81 @@ describe("mapping module", function()
 	end)
 
 	describe("generate_task_key", function()
-		it("should generate key for top-level task", function()
-			local key = mapping.generate_task_key("Shopping", "/path/to/file.md", "[0]")
-			assert.equals("Shopping|/path/to/file.md:[0]", key)
+		it("should return UUID as key", function()
+			local key = mapping.generate_task_key("uuid-abc123")
+			assert.equals("uuid-abc123", key)
 		end)
 
-		it("should generate key for second top-level task", function()
-			local key = mapping.generate_task_key("Shopping", "/path/to/file.md", "[1]")
-			assert.equals("Shopping|/path/to/file.md:[1]", key)
-		end)
-
-		it("should generate key for subtask", function()
-			local key = mapping.generate_task_key("Shopping", "/path/to/file.md", "[0].[1]")
-			assert.equals("Shopping|/path/to/file.md:[0].[1]", key)
-		end)
-
-		it("should generate key for deep subtask", function()
-			local key = mapping.generate_task_key("Shopping", "/path/to/file.md", "[0].[1].[2]")
-			assert.equals("Shopping|/path/to/file.md:[0].[1].[2]", key)
-		end)
-
-		it("should handle different list names", function()
-			local key = mapping.generate_task_key("Work Tasks", "/work.md", "[0]")
-			assert.equals("Work Tasks|/work.md:[0]", key)
+		it("should handle different UUIDs", function()
+			local key1 = mapping.generate_task_key("uuid-111")
+			local key2 = mapping.generate_task_key("uuid-222")
+			assert.equals("uuid-111", key1)
+			assert.equals("uuid-222", key2)
 		end)
 	end)
 
 	describe("register_task and get_google_id", function()
 		it("should register and retrieve task", function()
 			local map = { tasks = {} }
-			local key = "Shopping|/file.md:[0]"
+			local uuid = "uuid-abc123"
 
-			mapping.register_task(map, key, "google123", "Shopping", "/file.md", "[0]", nil)
+			mapping.register_task(map, uuid, "google123", "Shopping", "/file.md", nil)
 
-			local google_id = mapping.get_google_id(map, key)
+			local google_id = mapping.get_google_id(map, uuid)
 			assert.equals("google123", google_id)
 		end)
 
 		it("should store task metadata", function()
 			local map = { tasks = {} }
-			local key = "Shopping|/file.md:[0]"
+			local uuid = "uuid-abc123"
 
-			mapping.register_task(map, key, "google123", "Shopping", "/file.md", "[0]", nil)
+			mapping.register_task(map, uuid, "google123", "Shopping", "/file.md", nil)
 
-			local task_data = map.tasks[key]
+			local task_data = map.tasks[uuid]
 			assert.is_not_nil(task_data)
 			assert.equals("google123", task_data.google_id)
 			assert.equals("Shopping", task_data.list_name)
 			assert.equals("/file.md", task_data.file_path)
-			assert.equals("[0]", task_data.position_path)
-			assert.is_nil(task_data.parent_key)
+			assert.is_nil(task_data.parent_uuid)
 		end)
 
-		it("should register subtask with parent key", function()
+		it("should register subtask with parent uuid", function()
 			local map = { tasks = {} }
-			local key = "Shopping|/file.md:[0].[1]"
-			local parent_key = "Shopping|/file.md:[0]"
+			local uuid = "uuid-child"
+			local parent_uuid = "uuid-parent"
 
-			mapping.register_task(map, key, "google456", "Shopping", "/file.md", "[0].[1]", parent_key)
+			mapping.register_task(map, uuid, "google456", "Shopping", "/file.md", parent_uuid)
 
-			local task_data = map.tasks[key]
+			local task_data = map.tasks[uuid]
 			assert.is_not_nil(task_data)
 			assert.equals("google456", task_data.google_id)
-			assert.equals(parent_key, task_data.parent_key)
+			assert.equals(parent_uuid, task_data.parent_uuid)
 		end)
 	end)
 
 	describe("remove_task", function()
 		it("should remove task from mapping", function()
 			local map = { tasks = {} }
-			local key = "Shopping|/file.md:[0]"
+			local uuid = "uuid-abc123"
 
-			mapping.register_task(map, key, "google123", "Shopping", "/file.md", "[0]", nil)
+			mapping.register_task(map, uuid, "google123", "Shopping", "/file.md", nil)
 
-			mapping.remove_task(map, key)
+			mapping.remove_task(map, uuid)
 
-			assert.is_nil(map.tasks[key])
+			assert.is_nil(map.tasks[uuid])
 		end)
 	end)
 
 	describe("find_task_key_by_google_id", function()
-		it("should find task key by Google ID", function()
+		it("should find UUID by Google ID", function()
 			local map = { tasks = {} }
-			local key = "Shopping|/file.md:[0]"
+			local uuid = "uuid-abc123"
 
-			mapping.register_task(map, key, "google123", "Shopping", "/file.md", "[0]", nil)
+			mapping.register_task(map, uuid, "google123", "Shopping", "/file.md", nil)
 
 			local found_key = mapping.find_task_key_by_google_id(map, "google123")
 
-			assert.equals(key, found_key)
+			assert.equals(uuid, found_key)
 		end)
 
 		it("should return nil for non-existent Google ID", function()
@@ -117,31 +103,61 @@ describe("mapping module", function()
 		it("should remove tasks not in current list", function()
 			local map = { tasks = {} }
 
-			mapping.register_task(map, "Shopping|/file.md:[0]", "google1", "Shopping", "/file.md", "[0]", nil)
-			mapping.register_task(map, "Shopping|/file.md:[1]", "google2", "Shopping", "/file.md", "[1]", nil)
-			mapping.register_task(map, "Shopping|/file.md:[2]", "google3", "Shopping", "/file.md", "[2]", nil)
+			mapping.register_task(map, "uuid-1", "google1", "Shopping", "/file.md", nil)
+			mapping.register_task(map, "uuid-2", "google2", "Shopping", "/file.md", nil)
+			mapping.register_task(map, "uuid-3", "google3", "Shopping", "/file.md", nil)
 
-			local current_keys = { "Shopping|/file.md:[0]", "Shopping|/file.md:[2]" }
+			local current_keys = { "uuid-1", "uuid-3" }
 			local removed = mapping.cleanup_orphaned_tasks(map, "Shopping", current_keys)
 
 			assert.equals(1, removed)
-			assert.is_not_nil(map.tasks["Shopping|/file.md:[0]"])
-			assert.is_nil(map.tasks["Shopping|/file.md:[1]"])
-			assert.is_not_nil(map.tasks["Shopping|/file.md:[2]"])
+			assert.is_not_nil(map.tasks["uuid-1"])
+			assert.is_nil(map.tasks["uuid-2"])
+			assert.is_not_nil(map.tasks["uuid-3"])
 		end)
 
 		it("should not remove tasks from other lists", function()
 			local map = { tasks = {} }
 
-			mapping.register_task(map, "Shopping|/file.md:[0]", "google1", "Shopping", "/file.md", "[0]", nil)
-			mapping.register_task(map, "Work|/work.md:[0]", "google2", "Work", "/work.md", "[0]", nil)
+			mapping.register_task(map, "uuid-shopping", "google1", "Shopping", "/file.md", nil)
+			mapping.register_task(map, "uuid-work", "google2", "Work", "/work.md", nil)
 
 			local current_keys = {}
 			local removed = mapping.cleanup_orphaned_tasks(map, "Shopping", current_keys)
 
 			assert.equals(1, removed)
-			assert.is_nil(map.tasks["Shopping|/file.md:[0]"])
-			assert.is_not_nil(map.tasks["Work|/work.md:[0]"])
+			assert.is_nil(map.tasks["uuid-shopping"])
+			assert.is_not_nil(map.tasks["uuid-work"])
+		end)
+	end)
+
+	describe("migration", function()
+		it("should detect old format", function()
+			local old_map = {
+				lists = {},
+				tasks = {
+					["Shopping|/file.md:[0]"] = {
+						google_id = "g123",
+						position_path = "[0]",
+					},
+				},
+			}
+
+			assert.is_true(mapping.is_old_format(old_map))
+		end)
+
+		it("should not detect new format as old", function()
+			local new_map = {
+				lists = {},
+				tasks = {
+					["uuid-abc123"] = {
+						google_id = "g123",
+						parent_uuid = nil,
+					},
+				},
+			}
+
+			assert.is_false(mapping.is_old_format(new_map))
 		end)
 	end)
 end)

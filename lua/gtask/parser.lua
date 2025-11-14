@@ -14,6 +14,16 @@ function M.extract_list_name(lines)
 	return nil
 end
 
+---Extracts task UUID from HTML comment line
+---@param line string The line to check for UUID comment
+---@return string|nil The UUID if found, nil otherwise
+function M.extract_task_uuid(line)
+	-- Match pattern: <!-- gtask:uuid -->
+	-- Supports various whitespace around the UUID
+	local uuid = line:match("^%s*<!%-%-%s*gtask:%s*([%w%-]+)%s*%-%->%s*$")
+	return uuid
+end
+
 ---@class Task
 ---@field title string The task title
 ---@field completed boolean Whether the task is completed
@@ -22,7 +32,7 @@ end
 ---@field line_number integer The line number where this task appears
 ---@field indent_level integer The indentation level (0 for top-level tasks)
 ---@field parent_index integer|nil Index of parent task if this is a subtask
----@field position_path string|nil Tree position path like "[0]" or "[0].[1]"
+---@field uuid string|nil Stable UUID for this task (from <!-- gtask:uuid --> comment)
 
 ---Parses markdown lines to extract tasks with hierarchy and descriptions
 ---@param lines string[] Array of markdown lines
@@ -44,9 +54,6 @@ function M.parse_tasks(lines)
 
 	-- Build parent-child relationships
 	M.build_hierarchy(tasks)
-
-	-- Build position paths for stable task identification
-	M.build_position_paths(tasks)
 
 	return tasks
 end
@@ -74,15 +81,29 @@ function M.parse_single_task(lines, start_index)
 		indent_level = indent,
 		description = nil,
 		parent_index = nil,
+		uuid = nil, -- Will be extracted from comment if present
 	}
 
-	-- Look for description lines (non-task, non-empty lines at least as indented as the task)
-	-- Allow one empty line between task and description
+	-- Look for UUID comment immediately after task line (<!-- gtask:uuid -->)
 	local consumed_lines = 1
+	local uuid_found = false
+
+	if start_index + 1 <= #lines then
+		local next_line = lines[start_index + 1]
+		local uuid = M.extract_task_uuid(next_line)
+		if uuid then
+			task.uuid = uuid
+			consumed_lines = consumed_lines + 1
+			uuid_found = true
+		end
+	end
+
+	-- Look for description lines (non-task, non-empty lines at least as indented as the task)
+	-- Allow one empty line between task/UUID and description
 	local description_parts = {}
 	local skipped_initial_empty = false
 
-	for j = start_index + 1, #lines do
+	for j = start_index + consumed_lines, #lines do
 		local desc_line = lines[j]
 
 		-- Check if this is another task - if so, stop looking for description
@@ -186,39 +207,6 @@ function M.build_hierarchy(tasks)
 
 		-- Add this task to the stack as a potential parent
 		table.insert(parent_stack, { indent_level = task.indent_level, index = i })
-	end
-end
-
----Builds tree position paths for all tasks based on parent_index relationships
----Converts hierarchical parent-child relationships into stable position strings
----like "[0]", "[0].[1]", "[0].[1].[2]" that are resilient to line number changes
----@param tasks Task[] Array of tasks with parent_index set
-function M.build_position_paths(tasks)
-	-- Track child counts per parent to assign positions
-	local child_counts = {} -- Maps parent_index (or "top") to next child position
-
-	for i, task in ipairs(tasks) do
-		if task.parent_index then
-			-- This is a child task
-			local parent = tasks[task.parent_index]
-			if not parent or not parent.position_path then
-				-- Parent should have been processed first (array order guarantees this)
-				error("Parent task position not set for task: " .. task.title)
-			end
-
-			-- Get child position (how many children this parent already has)
-			local child_pos = child_counts[task.parent_index] or 0
-			child_counts[task.parent_index] = child_pos + 1
-
-			-- Build position path: parent's path + "." + child position
-			task.position_path = parent.position_path .. ".[" .. child_pos .. "]"
-		else
-			-- Top-level task
-			local top_level_pos = child_counts["top"] or 0
-			child_counts["top"] = top_level_pos + 1
-
-			task.position_path = "[" .. top_level_pos .. "]"
-		end
 	end
 end
 

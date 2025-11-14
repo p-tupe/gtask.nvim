@@ -402,163 +402,6 @@ describe("parser module", function()
 		end)
 	end)
 
-	describe("build_position_paths", function()
-		it("should assign position paths to flat list", function()
-			local tasks = {
-				{ title = "Task 1", parent_index = nil },
-				{ title = "Task 2", parent_index = nil },
-				{ title = "Task 3", parent_index = nil },
-			}
-
-			parser.build_position_paths(tasks)
-
-			assert.equals("[0]", tasks[1].position_path)
-			assert.equals("[1]", tasks[2].position_path)
-			assert.equals("[2]", tasks[3].position_path)
-		end)
-
-		it("should assign position paths to single parent with children", function()
-			local tasks = {
-				{ title = "Parent", parent_index = nil },
-				{ title = "Child 1", parent_index = 1 },
-				{ title = "Child 2", parent_index = 1 },
-			}
-
-			parser.build_position_paths(tasks)
-
-			assert.equals("[0]", tasks[1].position_path)
-			assert.equals("[0].[0]", tasks[2].position_path)
-			assert.equals("[0].[1]", tasks[3].position_path)
-		end)
-
-		it("should assign position paths to multiple parents with children", function()
-			local tasks = {
-				{ title = "Parent 1", parent_index = nil },
-				{ title = "Child 1.1", parent_index = 1 },
-				{ title = "Parent 2", parent_index = nil },
-				{ title = "Child 2.1", parent_index = 3 },
-				{ title = "Child 2.2", parent_index = 3 },
-			}
-
-			parser.build_position_paths(tasks)
-
-			assert.equals("[0]", tasks[1].position_path)
-			assert.equals("[0].[0]", tasks[2].position_path)
-			assert.equals("[1]", tasks[3].position_path)
-			assert.equals("[1].[0]", tasks[4].position_path)
-			assert.equals("[1].[1]", tasks[5].position_path)
-		end)
-
-		it("should handle deep nesting", function()
-			local tasks = {
-				{ title = "Level 0", parent_index = nil },
-				{ title = "Level 1", parent_index = 1 },
-				{ title = "Level 2", parent_index = 2 },
-				{ title = "Level 3", parent_index = 3 },
-			}
-
-			parser.build_position_paths(tasks)
-
-			assert.equals("[0]", tasks[1].position_path)
-			assert.equals("[0].[0]", tasks[2].position_path)
-			assert.equals("[0].[0].[0]", tasks[3].position_path)
-			assert.equals("[0].[0].[0].[0]", tasks[4].position_path)
-		end)
-
-		it("should handle mixed hierarchy", function()
-			local tasks = {
-				{ title = "Top 1", parent_index = nil },
-				{ title = "Top 1 - Child 1", parent_index = 1 },
-				{ title = "Top 1 - Child 1 - Grandchild 1", parent_index = 2 },
-				{ title = "Top 1 - Child 2", parent_index = 1 },
-				{ title = "Top 2", parent_index = nil },
-				{ title = "Top 3", parent_index = nil },
-				{ title = "Top 3 - Child 1", parent_index = 6 },
-			}
-
-			parser.build_position_paths(tasks)
-
-			assert.equals("[0]", tasks[1].position_path)
-			assert.equals("[0].[0]", tasks[2].position_path)
-			assert.equals("[0].[0].[0]", tasks[3].position_path)
-			assert.equals("[0].[1]", tasks[4].position_path)
-			assert.equals("[1]", tasks[5].position_path)
-			assert.equals("[2]", tasks[6].position_path)
-			assert.equals("[2].[0]", tasks[7].position_path)
-		end)
-
-		it("should handle siblings at same level", function()
-			local tasks = {
-				{ title = "Parent", parent_index = nil },
-				{ title = "Child 1", parent_index = 1 },
-				{ title = "Child 2", parent_index = 1 },
-				{ title = "Child 3", parent_index = 1 },
-				{ title = "Child 4", parent_index = 1 },
-			}
-
-			parser.build_position_paths(tasks)
-
-			assert.equals("[0]", tasks[1].position_path)
-			assert.equals("[0].[0]", tasks[2].position_path)
-			assert.equals("[0].[1]", tasks[3].position_path)
-			assert.equals("[0].[2]", tasks[4].position_path)
-			assert.equals("[0].[3]", tasks[5].position_path)
-		end)
-
-		it("should create unique position paths for all tasks", function()
-			local tasks = {
-				{ title = "A", parent_index = nil },
-				{ title = "A1", parent_index = 1 },
-				{ title = "A2", parent_index = 1 },
-				{ title = "B", parent_index = nil },
-				{ title = "B1", parent_index = 4 },
-				{ title = "B1a", parent_index = 5 },
-			}
-
-			parser.build_position_paths(tasks)
-
-			-- Collect all position paths
-			local paths = {}
-			for _, task in ipairs(tasks) do
-				table.insert(paths, task.position_path)
-			end
-
-			-- Check uniqueness
-			local seen = {}
-			for _, path in ipairs(paths) do
-				assert.is_nil(seen[path], "Position path " .. path .. " must be unique")
-				seen[path] = true
-			end
-
-			-- Verify count
-			assert.equals(6, #paths)
-		end)
-
-		it("should assign position paths that reflect hierarchy depth", function()
-			local tasks = {
-				{ title = "L0", parent_index = nil },
-				{ title = "L1", parent_index = 1 },
-				{ title = "L2", parent_index = 2 },
-				{ title = "L3", parent_index = 3 },
-				{ title = "L4", parent_index = 4 },
-			}
-
-			parser.build_position_paths(tasks)
-
-			-- Count dots in path should equal depth
-			local function count_depth(path)
-				local _, count = path:gsub("%.", "")
-				return count
-			end
-
-			assert.equals(0, count_depth(tasks[1].position_path), "L0 should have depth 0")
-			assert.equals(1, count_depth(tasks[2].position_path), "L1 should have depth 1")
-			assert.equals(2, count_depth(tasks[3].position_path), "L2 should have depth 2")
-			assert.equals(3, count_depth(tasks[4].position_path), "L3 should have depth 3")
-			assert.equals(4, count_depth(tasks[5].position_path), "L4 should have depth 4")
-		end)
-	end)
-
 	describe("edge cases and validation", function()
 		it("should handle empty task list", function()
 			local tasks = parser.parse_tasks({})
@@ -609,17 +452,15 @@ describe("parser module", function()
 			end
 
 			parser.build_hierarchy(tasks)
-			parser.build_position_paths(tasks)
 
 			-- Verify hierarchy is correctly built
 			for i = 2, 10 do
 				assert.equals(i - 1, tasks[i].parent_index)
 			end
 
-			-- Verify position paths increase in depth
+			-- Verify indent levels are correct
 			for i = 1, 10 do
-				local _, dot_count = tasks[i].position_path:gsub("%.", "")
-				assert.equals(i - 1, dot_count, "Task at level " .. i .. " should have " .. (i - 1) .. " dots")
+				assert.equals(i - 1, tasks[i].indent_level, "Task at level " .. i .. " should have indent_level " .. (i - 1))
 			end
 		end)
 	end)

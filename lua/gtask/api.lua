@@ -528,4 +528,39 @@ function M.delete_task(task_list_id, task_id, callback)
 	}, callback)
 end
 
+--- Move a task to a different parent (or to top-level)
+---@param task_list_id string The task list ID
+---@param task_id string The task ID to move
+---@param parent_id string|nil New parent task ID (nil for top-level)
+---@param callback function Callback (response, error)
+function M.move_task(task_list_id, task_id, parent_id, callback)
+	if not task_list_id or task_list_id == "" then
+		utils.notify("Task list ID is required", vim.log.levels.ERROR)
+		if callback then
+			callback(nil, "Task list ID is required")
+		end
+		return
+	end
+
+	if not task_id or task_id == "" then
+		utils.notify("Task ID is required", vim.log.levels.ERROR)
+		if callback then
+			callback(nil, "Task ID is required")
+		end
+		return
+	end
+
+	-- Build URL with parent parameter
+	local url = string.format("https://tasks.googleapis.com/tasks/v1/lists/%s/tasks/%s/move", task_list_id, task_id)
+
+	if parent_id and parent_id ~= "" then
+		url = url .. "?parent=" .. parent_id
+	end
+
+	request({
+		method = "POST",
+		url = url,
+	}, callback)
+end
+
 return M

@@ -12,80 +12,49 @@ describe("deletion and conflict resolution", function()
 		mapping = require("gtask.mapping")
 	end)
 
-	describe("deleted_from_google flag", function()
-		it("should not recreate tasks with deleted_from_google flag", function()
+	describe("task removal", function()
+		it("should remove task from mapping", function()
 			local map = { tasks = {} }
-			mapping.register_task(
-				map,
-				"List|/file.md:[0]",
-				"google1",
-				"List",
-				"/file.md",
-				"[0]",
-				nil,
-				"2025-01-01T10:00:00Z"
-			)
-			mapping.mark_deleted_from_google(map, "List|/file.md:[0]")
+			local uuid = "uuid-abc123"
 
-			local task_data = map.tasks["List|/file.md:[0]"]
-			assert.is_true(task_data.deleted_from_google)
-			assert.equals("google1", task_data.google_id) -- Still in mapping, just flagged
+			mapping.register_task(map, uuid, "google1", "List", "/file.md", nil, "2025-01-01T10:00:00Z")
+
+			-- Verify task exists
+			assert.is_not_nil(map.tasks[uuid])
+			assert.equals("google1", map.tasks[uuid].google_id)
+
+			-- Remove task
+			mapping.remove_task(map, uuid)
+
+			-- Task should be gone
+			assert.is_nil(map.tasks[uuid])
 		end)
 
-		it("should mark deleted_from_google when task deleted from Google", function()
+		it("should preserve other tasks when removing one", function()
 			local map = { tasks = {} }
-			mapping.register_task(
-				map,
-				"List|/file.md:[0]",
-				"google1",
-				"List",
-				"/file.md",
-				"[0]",
-				nil,
-				"2025-01-01T10:00:00Z"
-			)
+			local uuid1 = "uuid-111"
+			local uuid2 = "uuid-222"
 
-			-- Mark as deleted
-			mapping.mark_deleted_from_google(map, "List|/file.md:[0]")
+			mapping.register_task(map, uuid1, "google1", "List", "/file.md", nil, "2025-01-01T10:00:00Z")
+			mapping.register_task(map, uuid2, "google2", "List", "/file.md", nil, "2025-01-01T10:00:00Z")
 
-			local task_data = map.tasks["List|/file.md:[0]"]
-			assert.is_true(task_data.deleted_from_google)
+			-- Remove first task
+			mapping.remove_task(map, uuid1)
 
-			-- Should have updated last_synced timestamp
-			assert.is_not_nil(task_data.last_synced)
-		end)
-
-		it("should preserve task metadata when marked deleted", function()
-			local map = { tasks = {} }
-			mapping.register_task(
-				map,
-				"List|/file.md:[0]",
-				"google1",
-				"List",
-				"/file.md",
-				"[0]",
-				nil,
-				"2025-01-01T10:00:00Z"
-			)
-
-			local original_google_id = map.tasks["List|/file.md:[0]"].google_id
-			local original_list_name = map.tasks["List|/file.md:[0]"].list_name
-
-			mapping.mark_deleted_from_google(map, "List|/file.md:[0]")
-
-			-- Metadata should be preserved
-			assert.equals(original_google_id, map.tasks["List|/file.md:[0]"].google_id)
-			assert.equals(original_list_name, map.tasks["List|/file.md:[0]"].list_name)
+			-- First should be gone, second should remain
+			assert.is_nil(map.tasks[uuid1])
+			assert.is_not_nil(map.tasks[uuid2])
+			assert.equals("google2", map.tasks[uuid2].google_id)
 		end)
 	end)
 
 	describe("timestamp-based conflict resolution", function()
 		it("should use Google's completion status when Google timestamp is newer", function()
 			local map = { tasks = {} }
-			local task_key = "List|/file.md:[0]"
+			local uuid = "uuid-abc123"
 
 			-- Register task with old timestamp
-			mapping.register_task(map, task_key, "google1", "List", "/file.md", "[0]", nil, "2025-01-01T10:00:00Z")
+			mapping.register_task(map, uuid, "google1", "List", "/file.md", nil, "2025-01-01T10:00:00Z")
 
 			-- Verify timestamps can be compared
 			-- (Google's timestamp "2025-01-01T12:00:00Z" is newer than mapping's "2025-01-01T10:00:00Z")
@@ -94,10 +63,10 @@ describe("deletion and conflict resolution", function()
 
 		it("should use markdown's completion status when mapping timestamp is newer", function()
 			local map = { tasks = {} }
-			local task_key = "List|/file.md:[0]"
+			local uuid = "uuid-abc123"
 
 			-- Register task with recent timestamp
-			mapping.register_task(map, task_key, "google1", "List", "/file.md", "[0]", nil, "2025-01-01T12:00:00Z")
+			mapping.register_task(map, uuid, "google1", "List", "/file.md", nil, "2025-01-01T12:00:00Z")
 
 			-- Google task updated timestamp is older
 			local g_updated = "2025-01-01T10:00:00Z"
@@ -115,93 +84,49 @@ describe("deletion and conflict resolution", function()
 		end)
 	end)
 
-	describe("mark_deleted_from_google", function()
-		it("should set deleted_from_google flag to true", function()
-			local map = { tasks = {} }
-			mapping.register_task(map, "List|/file.md:[0]", "google1", "List", "/file.md", "[0]", nil)
 
-			mapping.mark_deleted_from_google(map, "List|/file.md:[0]")
-
-			assert.is_true(map.tasks["List|/file.md:[0]"].deleted_from_google)
-		end)
-
-		it("should update last_synced timestamp", function()
-			local map = { tasks = {} }
-			mapping.register_task(
-				map,
-				"List|/file.md:[0]",
-				"google1",
-				"List",
-				"/file.md",
-				"[0]",
-				nil,
-				"2025-01-01T10:00:00Z"
-			)
-
-			-- Mark task as deleted from Google
-			mapping.mark_deleted_from_google(map, "List|/file.md:[0]")
-
-			local new_synced = map.tasks["List|/file.md:[0]"].last_synced
-			assert.is_not_nil(new_synced)
-		end)
-
-		it("should not fail for non-existent task", function()
-			local map = { tasks = {} }
-
-			-- Should not error
-			assert.has_no_errors(function()
-				mapping.mark_deleted_from_google(map, "List|/file.md:[999]")
-			end)
-		end)
-	end)
 
 	describe("register_task with google_updated", function()
 		it("should store google_updated timestamp when provided", function()
 			local map = { tasks = {} }
+			local uuid = "uuid-abc123"
 			local timestamp = "2025-01-01T15:30:00Z"
 
-			mapping.register_task(map, "List|/file.md:[0]", "google1", "List", "/file.md", "[0]", nil, timestamp)
+			mapping.register_task(map, uuid, "google1", "List", "/file.md", nil, timestamp)
 
-			assert.equals(timestamp, map.tasks["List|/file.md:[0]"].google_updated)
+			assert.equals(timestamp, map.tasks[uuid].google_updated)
 		end)
 
 		it("should use current time when google_updated not provided", function()
 			local map = { tasks = {} }
+			local uuid = "uuid-abc123"
 
 			mapping.register_task(
 				map,
-				"List|/file.md:[0]",
+				uuid,
 				"google1",
 				"List",
 				"/file.md",
-				"[0]",
 				nil,
 				nil -- No timestamp provided
 			)
 
 			-- Should have some timestamp
-			assert.is_not_nil(map.tasks["List|/file.md:[0]"].google_updated)
+			assert.is_not_nil(map.tasks[uuid].google_updated)
 			-- Should be in RFC3339 format
 			assert.is_not_nil(
-				map.tasks["List|/file.md:[0]"].google_updated:match("%d%d%d%d%-%d%d%-%d%dT%d%d:%d%d:%d%dZ")
+				map.tasks[uuid].google_updated:match("%d%d%d%d%-%d%d%-%d%dT%d%d:%d%d:%d%dZ")
 			)
 		end)
 
-		it("should initialize deleted_from_google to false", function()
+		it("should store parent_uuid when provided", function()
 			local map = { tasks = {} }
+			local uuid = "uuid-child"
+			local parent_uuid = "uuid-parent"
 
-			mapping.register_task(
-				map,
-				"List|/file.md:[0]",
-				"google1",
-				"List",
-				"/file.md",
-				"[0]",
-				nil,
-				"2025-01-01T10:00:00Z"
-			)
+			mapping.register_task(map, uuid, "google1", "List", "/file.md", parent_uuid, "2025-01-01T10:00:00Z")
 
-			assert.is_false(map.tasks["List|/file.md:[0]"].deleted_from_google)
+			assert.equals(parent_uuid, map.tasks[uuid].parent_uuid)
 		end)
 	end)
 

@@ -21,11 +21,14 @@ Tasks use standard markdown checkbox syntax with specific indentation rules:
 # Task List Name <-- H1 heading becomes Google Tasks list name
 
 - [ ] Task title | 2025-01-15 <-- Task with due date
+<!-- gtask:abc123 --> <-- UUID for stable task identification (auto-generated)
 - [ ] Another task | 2025-01-15 14:30 <-- Task with due date and time
+<!-- gtask:xyz789 -->
 
   Task description (must be indented at least as much as the task, not less)
   More description lines
   - [ ] Subtask (indented 2 spaces from parent)
+  <!-- gtask:def456 -->
 
     Subtask description (indented at least as much as the subtask)
 ```
@@ -37,7 +40,7 @@ Tasks use standard markdown checkbox syntax with specific indentation rules:
 - **Task descriptions**: Any non-empty, non-task line following a task becomes its description. **MUST be indented at least as much as the task**. One blank line may separate a task from its description.
 - **Checkbox format**: `- [ ]` for incomplete, `- [x]` for completed
 - **Due dates**: Optional `| YYYY-MM-DD` or `| YYYY-MM-DD HH:MM` after task title, converted to RFC3339 format. Time is optional; if omitted, defaults to midnight UTC. When syncing from Google, time is only shown if not midnight.
-- **Task ID Tracking**: Task-to-Google-ID mappings are stored in `vim.fn.stdpath("data")/gtask_mappings.json` (managed automatically). This enables task renaming, deletion detection, and proper parent-child relationships while keeping markdown files clean.
+- **Task ID Tracking**: Each task is assigned a unique UUID embedded as an HTML comment (`<!-- gtask:uuid -->`). UUIDs are stable identifiers that persist across renames, moves, and edits. The mapping file `vim.fn.stdpath("data")/gtask_mappings.json` stores UUID→Google-ID relationships with sync timestamps (managed automatically). This enables task renaming, deletion detection, and proper parent-child relationships.
 - **Indentation calculation**: `math.floor(#indent_str / 2)` determines nesting level. The hierarchy builder uses a stack to find the nearest less-indented task as the parent.
 - **Filename normalization**: List names are normalized to safe filenames (e.g., "My Shopping List" → `my-shopping-list.md`). The H1 heading preserves the original name.
 
@@ -50,9 +53,9 @@ Tasks use standard markdown checkbox syntax with specific indentation rules:
 - `lua/gtask/auth.lua`: OAuth 2.0 authentication with polling-based flow
 - `lua/gtask/api.lua`: Google Tasks API client with automatic token refresh, list management (find/create by name), subtask creation
 - `lua/gtask/store.lua`: Token persistence to `vim.fn.stdpath("data")/gtask_tokens.json`
-- `lua/gtask/mapping.lua`: Task ID mapping persistence to `vim.fn.stdpath("data")/gtask_mappings.json` (tracks markdown↔Google task relationships)
-- `lua/gtask/parser.lua`: Markdown task parser (handles hierarchy, descriptions, due dates, and H1 extraction for list names)
-- `lua/gtask/sync.lua`: 2-way sync between markdown and Google Tasks (ID-based matching, multiple lists, parent-child relationships, deletion detection)
+- `lua/gtask/mapping.lua`: UUID-based task mapping persistence to `vim.fn.stdpath("data")/gtask_mappings.json` (tracks UUID↔Google task relationships with sync timestamps, includes automatic migration from old position-based format)
+- `lua/gtask/parser.lua`: Markdown task parser (handles hierarchy, descriptions, due dates, UUID extraction from HTML comments, and H1 extraction for list names)
+- `lua/gtask/sync.lua`: 2-way sync between markdown and Google Tasks (UUID-based matching with title fallback, automatic UUID generation/embedding, multiple lists, parent-child relationships, timestamp-based conflict resolution)
 - `lua/gtask/files.lua`: Markdown file discovery, directory scanning (recursive with ignore_patterns), and list name extraction
 - `plugin/gtask.lua`: Neovim command definitions - only 2 commands: `:GtaskAuth` and `:GtaskSync`
 
@@ -138,14 +141,16 @@ The `files.lua` module handles markdown file operations:
      - Perform 2-way sync for that specific list
 
 3. **2-Way Sync Per List** (`perform_twoway_sync`):
-   - Compare markdown tasks vs Google tasks by ID (from mapping) or title (fallback)
+   - Match markdown tasks to Google tasks by UUID (primary) or title (fallback for migration)
+   - Generate UUIDs for any tasks without them
    - Plan operations:
-     - Tasks only in markdown → create in Google Tasks
-     - Tasks only in Google → write to `[normalized-filename].md`
+     - Tasks only in markdown → create in Google Tasks, embed UUID in markdown
+     - Tasks only in Google → write to `[normalized-filename].md` with UUID comment
      - Tasks in both with differences → use timestamp comparison to determine winner:
        - If Google's `updated` > mapping's `google_updated`: Google wins, update markdown
        - Otherwise: Markdown wins, update Google
-   - Execute operations in parallel (Google API calls + markdown file write)
+   - Execute operations in parallel (Google API calls + markdown file writes)
+   - Embed all generated UUIDs into markdown files (bottom-to-top to preserve line numbers)
 
 **Key functions**:
 
@@ -233,41 +238,101 @@ lua test_pkce:*
 
 ## Current Limitations
 
-### 1. Position-Based Tracking Sensitivity
-
-- **Issue**: Task matching uses tree-based position paths (e.g., `[0]`, `[2][1]`)
-- **Current behavior**: When mapping exists, tasks are matched by position. When no mapping exists, falls back to title-based matching
-- **Impact**: Manually reordering or inserting tasks can cause position shifts, though the sync handles this gracefully
-- **Mitigation**: Title-based fallback prevents duplicates; sync reconciles position changes automatically
-
-### 2. Manual Sync Only
+### 1. Manual Sync Only
 
 - **Issue**: No automatic or scheduled synchronization
 - **Current behavior**: User must run `:GtaskSync` command manually
 - **Impact**: Changes aren't reflected until manual sync is triggered
 - **Potential enhancement**: Background sync, file watcher, or periodic auto-sync
 
-### 6. Limited Task Metadata Sync
+### 2. Limited Task Metadata Sync
 
 - **What syncs**: Title, status (completed/incomplete), description (notes), due date
 - **What doesn't sync**: Task order/position, creation date, last update time, links, attachments, other Google Tasks metadata
 - **Impact**: Full task history and metadata only available in Google Tasks interface
 
-### 7. Single H1 Heading Per File
+### 3. Single H1 Heading Per File
 
 - **Issue**: Only the first H1 heading in a file is used as the task list name
 - **Current behavior**: Subsequent H1 headings are ignored; all tasks in file go to the same list
 - **Impact**: Can't have multiple task lists in a single markdown file
 - **Workaround**: Use separate markdown files for different task lists
 
-### 8. Subtask Indentation Requirements
+### 4. Subtask Indentation Requirements
 
 - **Subtasks**: Must be indented at least 2 spaces more than their parent (2, 4, 6+ spaces all work)
 - **Task descriptions**: No strict indentation required - any non-task line following a task becomes its description
 - **Impact**: Subtasks with less than 2 spaces of additional indentation won't be recognized as children
 - **Note**: Based on `indent_level = math.floor(#indent_str / 2)` calculation and stack-based hierarchy building
 
-### 9. App isn't verified on Google
+### 5. App isn't verified on Google
+
+## UUID-Based Task Tracking
+
+The plugin uses a UUID-based system for stable task identification across renames, moves, and edits.
+
+### UUID Format
+
+- **Format**: `<!-- gtask:abc123 -->` - HTML comment, invisible when markdown is rendered
+- **Generation**: Base62-encoded timestamp + random number (8-12 characters)
+- **Placement**: Immediately after task line in markdown file
+- **Visibility**: Hidden in most markdown renderers, easy to ignore when reading raw markdown
+
+### UUID Generation and Embedding
+
+UUIDs are automatically generated and embedded during sync:
+
+1. **New tasks from markdown**: Generate UUID, create in Google Tasks, embed UUID comment in markdown
+2. **New tasks from Google**: Create task with UUID in markdown file
+3. **Existing tasks without UUID**: Generate UUID during sync, embed after sync completes
+4. **Migration from old format**: Title-based fallback matching reconnects tasks during first sync after migration
+
+**Embedding strategy**:
+- UUIDs are embedded **after** sync operations complete
+- Tasks are processed **bottom-to-top** to preserve line numbers during embedding
+- Each UUID is inserted on the line immediately following its task
+
+### Mapping File Structure
+
+The mapping file (`vim.fn.stdpath("data")/gtask_mappings.json`) stores:
+
+```json
+{
+  "lists": {
+    "Shopping": "google_list_id_123"
+  },
+  "tasks": {
+    "uuid-abc123": {
+      "google_id": "google_task_456",
+      "list_name": "Shopping",
+      "file_path": "/path/to/shopping.md",
+      "parent_uuid": null,
+      "google_updated": "2025-01-15T10:00:00Z",
+      "last_synced": "2025-01-15T10:05:00Z"
+    }
+  }
+}
+```
+
+**Fields**:
+- `google_id`: Google Tasks API task ID
+- `list_name`: Task list name (matches H1 heading)
+- `file_path`: Absolute path to markdown file containing the task
+- `parent_uuid`: UUID of parent task (null for top-level tasks)
+- `google_updated`: Last update timestamp from Google Tasks API (RFC3339)
+- `last_synced`: Timestamp when mapping was last updated (RFC3339)
+
+### Automatic Migration
+
+The plugin automatically detects and migrates old position-based mappings:
+
+1. **Detection**: `is_old_format()` checks for `position_path` field in any task
+2. **Backup**: Creates `gtask_mappings.json.backup` with old format
+3. **Migration**: Clears task mappings (preserves list mappings)
+4. **Re-matching**: Next sync uses title-based fallback to reconnect tasks
+5. **UUID generation**: All tasks get UUIDs during first sync after migration
+
+**User experience**: Migration is automatic and transparent. Users see a notification about migration and title-based re-matching on first sync.
 
 ## Subtask Implementation
 
@@ -276,12 +341,15 @@ Subtask parent-child relationships are **fully implemented** and synced bidirect
 ### How It Works
 
 **Markdown Format**:
-Subtasks are detected by indentation (minimum 2 spaces more than parent):
+Subtasks are detected by indentation (minimum 2 spaces more than parent), with UUID comments for stable tracking:
 
 ```markdown
 - [ ] Parent task
+<!-- gtask:abc123 -->
   - [ ] Subtask (2 spaces)
+  <!-- gtask:def456 -->
     - [ ] Nested subtask (4 spaces)
+    <!-- gtask:ghi789 -->
       Description (4+ spaces)
 ```
 
@@ -289,19 +357,21 @@ Subtasks are detected by indentation (minimum 2 spaces more than parent):
 - Indentation level calculated: `indent_level = math.floor(#indent_str / 2)`
 - Stack-based hierarchy building finds nearest less-indented task as parent
 - Sets `parent_index` field on each subtask
+- Extracts UUID from `<!-- gtask:uuid -->` comment following task line
 
 **Syncing** (`sync.lua`):
 The sync uses a **two-pass creation strategy**:
 
 **Phase 1: Top-level tasks**
 - Creates all tasks without `parent_index` first
-- Stores created task IDs in `task_id_map[task_index]`
+- Stores created task IDs mapped by UUID: `created_google_ids[uuid] = google_id`
 - Waits for ALL top-level tasks to complete
 
 **Phase 2: Subtasks with parent references**
-- For each subtask, looks up `parent_id = task_id_map[parent_index]`
-- Calls `api.create_task_with_parent(list_id, task_data, parent_id, nil, callback)`
-- Registers parent_key in mapping
+- For each subtask, looks up parent's UUID from `parent_index`
+- Gets `parent_google_id = created_google_ids[parent_uuid]`
+- Calls `api.create_task_with_parent(list_id, task_data, parent_google_id, nil, callback)`
+- Registers with `parent_uuid` in mapping
 
 **API Support** (`api.lua`):
 ```lua
@@ -317,15 +387,37 @@ function M.create_task_with_parent(task_list_id, task_data, parent_id, previous_
 end
 ```
 
-**Mapping Tracking**:
-- Parent-child relationships stored in `gtask_mappings.json`
-- `parent_key` field links subtask to parent
-- Position paths (e.g., `[0][2]`) track nested structure
+**Mapping Tracking** (`gtask_mappings.json`):
+```json
+{
+  "lists": {"Shopping": "google_list_id_123"},
+  "tasks": {
+    "abc123": {
+      "google_id": "google_task_id_456",
+      "list_name": "Shopping",
+      "file_path": "/path/to/shopping.md",
+      "parent_uuid": null,
+      "google_updated": "2025-01-15T10:00:00Z",
+      "last_synced": "2025-01-15T10:05:00Z"
+    },
+    "def456": {
+      "google_id": "google_task_id_789",
+      "list_name": "Shopping",
+      "file_path": "/path/to/shopping.md",
+      "parent_uuid": "abc123",
+      "google_updated": "2025-01-15T10:00:00Z",
+      "last_synced": "2025-01-15T10:05:00Z"
+    }
+  }
+}
+```
+- Parent-child relationships tracked via `parent_uuid` field
+- UUIDs provide stable references across renames and moves
 
 ### Current Limitations
 
 - **No sibling ordering**: The `previous` parameter is not used yet, so subtask order may not be preserved
-- **Parent changes**: Moving a subtask to a different parent in markdown creates a new task instead of using `move` API
+- **Parent changes**: Moving a subtask to a different parent requires updating the parent relationship. The `move_task()` API function is available in `api.lua` but not yet integrated into sync logic
 - **Deep nesting**: No depth limit validation (Google Tasks supports unlimited depth)
 
 ## Security Notes

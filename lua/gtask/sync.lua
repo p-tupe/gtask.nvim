@@ -50,6 +50,106 @@ local function normalize_filename(list_name)
 	return normalized
 end
 
+---Generates a short UUID for task identification
+---Uses base62 encoding to create compact, URL-safe IDs (8-12 characters)
+---@return string A unique UUID string
+local function generate_uuid()
+	-- Use timestamp + random for uniqueness
+	local timestamp = os.time()
+	local random = math.random(0, 999999)
+
+	-- Combine and encode to create a compact ID
+	local combined = timestamp * 1000000 + random
+
+	-- Base62 charset (alphanumeric, case-sensitive)
+	local charset = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+	local uuid = ""
+
+	while combined > 0 do
+		local remainder = combined % 62
+		uuid = charset:sub(remainder + 1, remainder + 1) .. uuid
+		combined = math.floor(combined / 62)
+	end
+
+	-- Ensure minimum length of 8 chars by padding
+	while #uuid < 8 do
+		uuid = "0" .. uuid
+	end
+
+	return uuid
+end
+
+---Embeds a UUID comment into a markdown file after a task line
+---@param file_path string Path to the markdown file
+---@param task_line_number integer Line number of the task (1-indexed)
+---@param uuid string The UUID to embed
+---@param callback function|nil Optional callback (success, err_msg)
+local function embed_task_uuid(file_path, task_line_number, uuid, callback)
+	-- Read file
+	local file = io.open(file_path, "r")
+	if not file then
+		if callback then
+			callback(false, "Failed to open file: " .. file_path)
+		end
+		return
+	end
+
+	local lines = {}
+	for line in file:lines() do
+		table.insert(lines, line)
+	end
+	file:close()
+
+	-- Validate line number
+	if task_line_number < 1 or task_line_number > #lines then
+		if callback then
+			callback(false, string.format("Invalid line number: %d (file has %d lines)", task_line_number, #lines))
+		end
+		return
+	end
+
+	-- Check if UUID comment already exists on next line
+	if task_line_number < #lines then
+		local next_line = lines[task_line_number + 1]
+		local existing_uuid = parser.extract_task_uuid(next_line)
+		if existing_uuid then
+			-- UUID already exists, don't duplicate
+			if callback then
+				callback(true, nil)
+			end
+			return
+		end
+	end
+
+	-- Get indentation from task line
+	local task_line = lines[task_line_number]
+	local indent = task_line:match("^(%s*)")
+
+	-- Create UUID comment with same indentation as task
+	local uuid_comment = indent .. "<!-- gtask:" .. uuid .. " -->"
+
+	-- Insert UUID comment after task line
+	table.insert(lines, task_line_number + 1, uuid_comment)
+
+	-- Write back to file
+	local write_file = io.open(file_path, "w")
+	if not write_file then
+		if callback then
+			callback(false, "Failed to open file for writing: " .. file_path)
+		end
+		return
+	end
+
+	for _, line in ipairs(lines) do
+		write_file:write(line .. "\n")
+	end
+	write_file:close()
+
+	if callback then
+		callback(true, nil)
+	end
+end
+
 ---Checks if a Google task needs to be updated based on markdown task
 ---@param mdtask Task Markdown task
 ---@param gtask table Google task
@@ -182,88 +282,95 @@ function M.perform_twoway_sync(sync_state, callback)
 		google_by_title[normalized_title] = gtask
 	end
 
-	-- Build task keys with exact position matching only
-	local md_task_keys = {}
-	local md_task_keys_set = {}
+	-- Build task keys using UUID-based matching
+	local md_task_uuids = {}
+	local md_task_uuids_set = {}
 	local all_md_tasks_with_keys = {}
+	local tasks_needing_uuids = {} -- Track tasks that need UUIDs generated
 
 	for i, mdtask in ipairs(markdown_tasks) do
-		-- Task already has position_path from parser
 		local file_path = mdtask.source_file_path or ""
 
-		-- Generate tree-position-based key using position_path
-		local task_key = mapping.generate_task_key(list_name, file_path, mdtask.position_path)
+		-- Generate or use existing UUID
+		local task_uuid = mdtask.uuid
+		if not task_uuid then
+			-- Task doesn't have UUID yet - generate one
+			task_uuid = generate_uuid()
+			mdtask.uuid = task_uuid
+			-- Mark for UUID embedding later
+			table.insert(tasks_needing_uuids, {
+				file_path = file_path,
+				line_number = mdtask.line_number,
+				uuid = task_uuid,
+			})
+		end
+
+		-- Generate UUID-based key
+		local task_key = mapping.generate_task_key(task_uuid)
 
 		-- Get mapping data for this task
 		local mapping_data = map.tasks[task_key]
 		local google_id = mapping_data and mapping_data.google_id or nil
 		local matched_gtask = nil
 
-		-- Skip tasks that were previously deleted from Google (don't recreate them)
-		-- Note: Using negative condition for Lua 5.1 compatibility (no goto/continue)
-		if not (mapping_data and mapping_data.deleted_from_google) then
-			if google_id and google_by_id[google_id] then
-				-- Preferred: Match by Google Task ID from our mapping
-				matched_gtask = google_by_id[google_id]
-			elseif not mapping_data then
-				-- Fallback: Match by title when no mapping exists
-				-- This handles cases where mappings were lost or tasks were manually added
-				-- IMPORTANT: Only match if parent relationships are compatible (both top-level)
-				local normalized_md_title = mdtask.title:match("^%s*(.-)%s*$")
-				local candidate_gtask = google_by_title[normalized_md_title]
+		if google_id and google_by_id[google_id] then
+			-- Preferred: Match by Google Task ID from our mapping
+			matched_gtask = google_by_id[google_id]
+		elseif not mapping_data then
+			-- Fallback: Match by title when no mapping exists (migration/recovery)
+			-- This handles cases where mappings were lost or tasks were manually added
+			-- IMPORTANT: Only match if parent relationships are compatible (both top-level)
+			local normalized_md_title = mdtask.title:match("^%s*(.-)%s*$")
+			local candidate_gtask = google_by_title[normalized_md_title]
 
-				if candidate_gtask then
-					-- Check parent relationship compatibility
-					local md_is_toplevel = not mdtask.parent_index
-					local g_is_toplevel = not candidate_gtask.parent or candidate_gtask.parent == ""
+			if candidate_gtask then
+				-- Check parent relationship compatibility
+				local md_is_toplevel = not mdtask.parent_index
+				local g_is_toplevel = not candidate_gtask.parent or candidate_gtask.parent == ""
 
-					if md_is_toplevel == g_is_toplevel then
-						-- Both are top-level or both have parents - safe to match
-						matched_gtask = candidate_gtask
-						google_id = candidate_gtask.id
-						utils.notify(
-							string.format("Matched task by title (no mapping): '%s'", mdtask.title),
-							vim.log.levels.INFO
-						)
-					else
-						-- Parent relationship mismatch - don't match (treat as different tasks)
-						utils.notify(
-							string.format(
-								"Skipping title match for '%s': parent mismatch (md=%s, g=%s)",
-								mdtask.title,
-								md_is_toplevel and "top-level" or "subtask",
-								g_is_toplevel and "top-level" or "subtask"
-							),
-							vim.log.levels.INFO
-						)
-					end
+				if md_is_toplevel == g_is_toplevel then
+					-- Both are top-level or both have parents - safe to match
+					matched_gtask = candidate_gtask
+					google_id = candidate_gtask.id
+					utils.notify(
+						string.format("Matched task by title (no mapping): '%s'", mdtask.title),
+						vim.log.levels.INFO
+					)
+				else
+					-- Parent relationship mismatch - don't match (treat as different tasks)
+					utils.notify(
+						string.format(
+							"Skipping title match for '%s': parent mismatch (md=%s, g=%s)",
+							mdtask.title,
+							md_is_toplevel and "top-level" or "subtask",
+							g_is_toplevel and "top-level" or "subtask"
+						),
+						vim.log.levels.INFO
+					)
 				end
 			end
-
-			table.insert(md_task_keys, task_key)
-			md_task_keys_set[task_key] = true
-			table.insert(all_md_tasks_with_keys, {
-				task = mdtask,
-				key = task_key,
-				task_index = i, -- Store array index for parent-child mapping
-				google_id = google_id, -- Will be set by title match if no mapping exists
-				matched_gtask = matched_gtask,
-				mapping_data = mapping_data,
-			})
 		end
+
+		table.insert(md_task_uuids, task_key)
+		md_task_uuids_set[task_key] = true
+		table.insert(all_md_tasks_with_keys, {
+			task = mdtask,
+			key = task_key,
+			uuid = task_uuid,
+			task_index = i, -- Store array index for parent-child mapping
+			google_id = google_id, -- Will be set by title match if no mapping exists
+			matched_gtask = matched_gtask,
+			mapping_data = mapping_data,
+		})
 	end
 
 	-- Detect tasks deleted from markdown (exist in mapping but not in current markdown)
 	local deleted_from_markdown = {}
-	for task_key, mapping_data in pairs(map.tasks) do
-		if
-			mapping_data.list_name == list_name
-			and not md_task_keys_set[task_key]
-			and not mapping_data.deleted_from_google
-		then
-			-- Task was in mapping but not in current markdown
+	for task_uuid, mapping_data in pairs(map.tasks) do
+		if mapping_data.list_name == list_name and not md_task_uuids_set[task_uuid] then
+			-- Task UUID was in mapping but not in current markdown
 			table.insert(deleted_from_markdown, {
-				key = task_key,
+				uuid = task_uuid,
 				google_id = mapping_data.google_id,
 				mapping_data = mapping_data,
 			})
@@ -292,9 +399,9 @@ function M.perform_twoway_sync(sync_state, callback)
 	-- Process each markdown task to determine what operations are needed
 	for _, item in ipairs(all_md_tasks_with_keys) do
 		-- Build parent reference for subtasks (used in Google Tasks parent-child relationships)
-		local parent_key = nil
+		local parent_uuid = nil
 		if item.task.parent_index and all_md_tasks_with_keys[item.task.parent_index] then
-			parent_key = all_md_tasks_with_keys[item.task.parent_index].key
+			parent_uuid = all_md_tasks_with_keys[item.task.parent_index].uuid
 		end
 
 		if item.google_id then
@@ -331,8 +438,9 @@ function M.perform_twoway_sync(sync_state, callback)
 							markdown_task = item.task,
 							google_task = item.matched_gtask,
 							task_key = item.key,
+							uuid = item.uuid,
 							task_index = item.task_index,
-							parent_key = parent_key,
+							parent_uuid = parent_uuid,
 						})
 					else -- to_markdown
 						table.insert(operations.to_markdown, {
@@ -340,7 +448,6 @@ function M.perform_twoway_sync(sync_state, callback)
 							google_task = item.matched_gtask,
 							task_key = item.key,
 							file_path = item.task.source_file_path,
-							position_path = item.task.position_path,
 							markdown_task = item.task, -- Keep reference to markdown task for comparison
 						})
 					end
@@ -351,12 +458,11 @@ function M.perform_twoway_sync(sync_state, callback)
 					if not item.mapping_data then
 						mapping.register_task(
 							map,
-							item.key,
+							item.uuid,
 							item.google_id,
 							list_name,
 							item.task.source_file_path or "",
-							item.task.position_path,
-							parent_key,
+							parent_uuid,
 							item.matched_gtask.updated or os.date("!%Y-%m-%dT%H:%M:%SZ")
 						)
 					end
@@ -376,8 +482,9 @@ function M.perform_twoway_sync(sync_state, callback)
 				if item.task.completed then
 					-- Completed task deleted from Google
 					if config.sync.keep_completed_in_markdown then
-						-- Mark as deleted, keep in markdown
-						mapping.mark_deleted_from_google(map, item.key)
+						-- Remove from mapping but keep in markdown
+						-- This prevents the task from being re-synced to Google
+						mapping.remove_task(map, item.uuid)
 						utils.notify(
 							string.format("Completed task deleted from Google (kept in markdown): %s", item.task.title),
 							vim.log.levels.INFO
@@ -385,18 +492,16 @@ function M.perform_twoway_sync(sync_state, callback)
 					else
 						-- Delete from markdown too
 						table.insert(operations.delete_from_markdown, {
-							task_key = item.key,
+							task_key = item.uuid,
 							file_path = item.task.source_file_path,
-							position_path = item.task.position_path,
 							title = item.task.title,
 						})
 					end
 				else
 					-- Incomplete task deleted from Google - delete from markdown
 					table.insert(operations.delete_from_markdown, {
-						task_key = item.key,
+						task_key = item.uuid,
 						file_path = item.task.source_file_path,
-						position_path = item.task.position_path,
 						title = item.task.title,
 					})
 				end
@@ -407,8 +512,9 @@ function M.perform_twoway_sync(sync_state, callback)
 				type = "create",
 				markdown_task = item.task,
 				task_key = item.key,
+				uuid = item.uuid,
 				task_index = item.task_index,
-				parent_key = parent_key,
+				parent_uuid = parent_uuid,
 			})
 		end
 	end
@@ -426,7 +532,7 @@ function M.perform_twoway_sync(sync_state, callback)
 	for _, deleted_item in ipairs(deleted_from_markdown) do
 		table.insert(operations.delete_from_google, {
 			google_id = deleted_item.google_id,
-			task_key = deleted_item.key,
+			task_key = deleted_item.uuid,
 		})
 	end
 
@@ -465,8 +571,9 @@ function M.perform_twoway_sync(sync_state, callback)
 		markdown_dir,
 		list_name,
 		map,
-		md_task_keys,
+		md_task_uuids,
 		markdown_tasks,
+		tasks_needing_uuids,
 		callback
 	)
 end
@@ -482,8 +589,9 @@ end
 ---@param markdown_dir string Markdown directory path
 ---@param list_name string Name of the task list
 ---@param map table Mapping data
----@param md_task_keys table Array of current markdown task keys
+---@param md_task_uuids table Array of current markdown task UUIDs
 ---@param markdown_tasks table Array of markdown tasks for this list
+---@param tasks_needing_uuids table Array of tasks that need UUIDs embedded
 ---@param callback function Callback when complete
 function M.execute_twoway_sync(
 	operations,
@@ -491,8 +599,9 @@ function M.execute_twoway_sync(
 	markdown_dir,
 	list_name,
 	map,
-	md_task_keys,
+	md_task_uuids,
 	markdown_tasks,
+	tasks_needing_uuids,
 	callback
 )
 	-- Categorize operations: updates, top-level creates, and subtask creates
@@ -538,6 +647,17 @@ function M.execute_twoway_sync(
 	-- Maps markdown task array index to its Google Task ID (for parent-child linking)
 	local task_id_map = {}
 
+	-- Pre-populate task_id_map with existing tasks (so subtasks can find their parents)
+	for i, task in ipairs(markdown_tasks) do
+		local task_uuid = task.uuid
+		if task_uuid then
+			local mapping_data = map.tasks[task_uuid]
+			if mapping_data and mapping_data.google_id then
+				task_id_map[i] = mapping_data.google_id
+			end
+		end
+	end
+
 	-- Callback invoked after each async operation completes
 	local function op_complete(success, err_msg)
 		completed = completed + 1
@@ -548,13 +668,55 @@ function M.execute_twoway_sync(
 		-- All operations complete - cleanup and finalize
 		if completed >= total_ops then
 			-- Remove stale mappings for tasks that no longer exist in this list
-			local removed_count = mapping.cleanup_orphaned_tasks(map, list_name, md_task_keys)
+			local removed_count = mapping.cleanup_orphaned_tasks(map, list_name, md_task_uuids)
 			if removed_count > 0 then
 				utils.notify(
 					string.format("Cleaned up %d orphaned task mapping(s)", removed_count),
 					vim.log.levels.INFO
 				)
 			end
+
+			-- Embed UUIDs for tasks that were created without them
+			if #tasks_needing_uuids > 0 then
+				utils.notify(
+					string.format("Embedding %d UUID(s) in markdown files...", #tasks_needing_uuids),
+					vim.log.levels.INFO
+				)
+
+				-- Group tasks by file to minimize file operations
+				local tasks_by_file = {}
+				for _, task_info in ipairs(tasks_needing_uuids) do
+					if not tasks_by_file[task_info.file_path] then
+						tasks_by_file[task_info.file_path] = {}
+					end
+					table.insert(tasks_by_file[task_info.file_path], task_info)
+				end
+
+				-- Embed UUIDs file by file
+				local embedding_errors = {}
+				for file_path, file_tasks in pairs(tasks_by_file) do
+					-- Sort by line number descending (embed from bottom to top to preserve line numbers)
+					table.sort(file_tasks, function(a, b)
+						return a.line_number > b.line_number
+					end)
+
+					for _, task_info in ipairs(file_tasks) do
+						embed_task_uuid(file_path, task_info.line_number, task_info.uuid, function(success, err_msg)
+							if not success and err_msg then
+								table.insert(embedding_errors, err_msg)
+							end
+						end)
+					end
+				end
+
+				if #embedding_errors > 0 then
+					utils.notify(
+						"UUID embedding completed with errors: " .. table.concat(embedding_errors, ", "),
+						vim.log.levels.WARN
+					)
+				end
+			end
+
 			-- Note: Final mapping.save() happens in sync_multiple_lists after all lists sync
 
 			if #errors > 0 then
@@ -582,12 +744,12 @@ function M.execute_twoway_sync(
 					or os.date("!%Y-%m-%dT%H:%M:%SZ")
 				mapping.register_task(
 					map,
-					op.task_key,
+					op.uuid,
 					op.google_task.id,
 					list_name,
 					file_path,
-					op.markdown_task.position_path,
-					op.parent_key,
+					
+					op.parent_uuid,
 					google_updated
 				)
 			end
@@ -618,26 +780,16 @@ function M.execute_twoway_sync(
 		table.insert(deletions_by_file[file_path], del_op)
 	end
 
-	-- Sort each file's deletions by position depth (deeper/longer paths first = delete children before parents)
+	-- Process deletions sequentially for each file
 	for file_path, file_deletions in pairs(deletions_by_file) do
-		table.sort(file_deletions, function(a, b)
-			-- Sort by position path depth (more brackets = deeper)
-			local a_depth = select(2, a.position_path:gsub("%[", ""))
-			local b_depth = select(2, b.position_path:gsub("%[", ""))
-			if a_depth ~= b_depth then
-				return a_depth > b_depth -- Deeper positions first
-			end
-			return a.position_path > b.position_path -- Lexicographic for same depth
-		end)
-
-		-- Process deletions sequentially for this file using position paths
+		-- Process deletions sequentially for this file
 		local function delete_next(index)
 			if index > #file_deletions then
 				return -- Done with this file
 			end
 
 			local del_op = file_deletions[index]
-			M.delete_task_by_position(del_op.file_path, del_op.position_path, function(success, err_msg)
+			M.delete_task_by_uuid(del_op.file_path, del_op.task_key, function(success, err_msg)
 				if success then
 					-- Remove from mapping
 					mapping.remove_task(map, del_op.task_key)
@@ -670,12 +822,12 @@ function M.execute_twoway_sync(
 					local file_path = op.markdown_task.source_file_path or ""
 					mapping.register_task(
 						map,
-						op.task_key,
+						op.uuid,
 						created_task.id,
 						list_name,
 						file_path,
-						op.markdown_task.position_path,
-						nil, -- parent_key is nil for top-level tasks
+						
+						nil, -- parent_uuid is nil for top-level tasks
 						created_task.updated
 					)
 				end
@@ -696,12 +848,11 @@ function M.execute_twoway_sync(
 									local sub_file_path = subop.markdown_task.source_file_path or ""
 									mapping.register_task(
 										map,
-										subop.task_key,
+										subop.uuid,
 										sub_created_task.id,
 										list_name,
 										sub_file_path,
-										subop.markdown_task.position_path,
-										subop.parent_key,
+										subop.parent_uuid,
 										sub_created_task.updated
 									)
 								end
@@ -728,12 +879,11 @@ function M.execute_twoway_sync(
 						local sub_file_path = subop.markdown_task.source_file_path or ""
 						mapping.register_task(
 							map,
-							subop.task_key,
+							subop.uuid,
 							sub_created_task.id,
 							list_name,
 							sub_file_path,
-							subop.markdown_task.position_path,
-							subop.parent_key,
+							subop.parent_uuid,
 							sub_created_task.updated
 						)
 					end
@@ -777,9 +927,9 @@ function M.execute_twoway_sync(
 
 	-- Phase 4b: Update tasks in markdown from Google (individual operations)
 	for _, update_op in ipairs(field_updates) do
-		M.update_task_from_google(
+		M.update_task_from_google_by_uuid(
 			update_op.file_path,
-			update_op.position_path,
+			update_op.task_key,
 			update_op.google_task,
 			update_op.markdown_task,
 			function(success, err_msg)
@@ -828,6 +978,11 @@ local function google_task_to_markdown_lines(gtask, indent_level)
 	end
 
 	table.insert(lines, task_line)
+
+	-- Add UUID comment for stable task identification
+	-- Generate UUID for this task if coming from Google
+	local uuid = generate_uuid()
+	table.insert(lines, indent .. "<!-- gtask:" .. uuid .. " -->")
 
 	-- Add description/notes if present
 	if gtask.notes and gtask.notes ~= "" then
@@ -1076,7 +1231,168 @@ function M.update_task_completion_in_markdown(file_path, line_number, completed,
 	end
 end
 
----Updates the completion status of a task in markdown by position path
+---Helper function to find a task by UUID in a file
+---@param file_path string Path to the markdown file
+---@param uuid string Task UUID
+---@return table|nil task The found task with its line number, or nil if not found
+---@return table|nil lines All lines from the file
+local function find_task_by_uuid(file_path, uuid)
+	local file = io.open(file_path, "r")
+	if not file then
+		return nil, nil
+	end
+
+	local lines = {}
+	for line in file:lines() do
+		table.insert(lines, line)
+	end
+	file:close()
+
+	local tasks = parser.parse_tasks(lines)
+	for _, task in ipairs(tasks) do
+		if task.uuid == uuid then
+			return task, lines
+		end
+	end
+
+	return nil, lines
+end
+
+---Updates a task from Google Tasks data (UUID-based)
+---@param file_path string Path to the markdown file
+---@param uuid string Task UUID
+---@param google_task table Google Task data
+---@param markdown_task table Markdown task data (for comparison)
+---@param callback function Callback when complete (success, err_msg)
+function M.update_task_from_google_by_uuid(file_path, uuid, google_task, markdown_task, callback)
+	local target_task, lines = find_task_by_uuid(file_path, uuid)
+
+	if not target_task then
+		if callback then
+			callback(false, string.format("Task with UUID %s not found in %s", uuid, file_path))
+		end
+		return
+	end
+
+	-- Build updated task line from Google Task data
+	local indent = string.rep("\t", target_task.indent_level or 0)
+	local checkbox = google_task.status == "completed" and "[x]" or "[ ]"
+	local title = google_task.title or target_task.title
+
+	-- Add due date if present (convert from RFC3339 to YYYY-MM-DD HH:MM or YYYY-MM-DD)
+	local due_str = ""
+	if google_task.due and google_task.due ~= "" then
+		local date_part, time_part = google_task.due:match("(%d%d%d%d%-%d%d%-%d%d)T(%d%d:%d%d)")
+		if date_part then
+			due_str = " | " .. date_part
+			if time_part and time_part ~= "00:00" then
+				due_str = due_str .. " " .. time_part
+			end
+		end
+	end
+
+	local new_task_line = indent .. "- " .. checkbox .. " " .. title .. due_str
+
+	-- Update the task line
+	lines[target_task.line_number] = new_task_line
+
+	-- Handle description update
+	local description = google_task.notes or ""
+
+	-- Find and remove old description lines
+	local desc_start = target_task.line_number + 1
+
+	-- Skip UUID comment if present
+	if desc_start <= #lines and lines[desc_start]:match("^%s*<!%-%-%s*gtask:") then
+		desc_start = desc_start + 1
+	end
+
+	local desc_end = desc_start - 1
+
+	-- Find the end of the current description
+	for i = desc_start, #lines do
+		local line = lines[i]
+		if line:match("^%s*%-%s+%[") then
+			break
+		elseif line:match("^%s*$") then
+			desc_end = i
+		elseif line:match("^%s+%S") then
+			desc_end = i
+		else
+			break
+		end
+	end
+
+	-- Remove old description lines
+	if desc_end >= desc_start then
+		for i = desc_end, desc_start, -1 do
+			table.remove(lines, i)
+		end
+	end
+
+	-- Insert new description if present
+	if description ~= "" then
+		local desc_indent = indent .. "  "
+		local desc_lines = vim.split(description, "\n", { plain = true })
+
+		-- Calculate insertion point (after task line and UUID comment if present)
+		local insert_pos = target_task.line_number + 1
+		if insert_pos <= #lines and lines[insert_pos]:match("^%s*<!%-%-%s*gtask:") then
+			insert_pos = insert_pos + 1
+		end
+
+		-- Insert blank line before description
+		table.insert(lines, insert_pos, "")
+
+		-- Insert description lines
+		for i, desc_line in ipairs(desc_lines) do
+			if desc_line ~= "" then
+				table.insert(lines, insert_pos + i, desc_indent .. desc_line)
+			else
+				table.insert(lines, insert_pos + i, "")
+			end
+		end
+	end
+
+	-- Write back to file
+	local write_file = io.open(file_path, "w")
+	if not write_file then
+		if callback then
+			callback(false, "Failed to open file for writing: " .. file_path)
+		end
+		return
+	end
+
+	for _, line in ipairs(lines) do
+		write_file:write(line .. "\n")
+	end
+	write_file:close()
+
+	if callback then
+		callback(true, nil)
+	end
+end
+
+---Deletes a task from markdown by UUID
+---@param file_path string Path to the markdown file
+---@param uuid string Task UUID
+---@param callback function Callback (success, err_msg)
+function M.delete_task_by_uuid(file_path, uuid, callback)
+	local target_task, lines = find_task_by_uuid(file_path, uuid)
+
+	if not target_task then
+		if callback then
+			callback(false, string.format("Task with UUID %s not found in %s", uuid, file_path))
+		end
+		return
+	end
+
+	-- Delete by the current line number
+	M.delete_task_from_markdown(file_path, target_task.line_number, callback)
+end
+
+---DEPRECATED: Updates the completion status of a task in markdown by position path
+---Use UUID-based functions instead
 ---@param file_path string Path to the markdown file
 ---@param position_path string Tree-based position path (e.g., "[0]", "[2][1]")
 ---@param completed boolean New completion status
@@ -1189,6 +1505,12 @@ function M.update_task_from_google(file_path, position_path, google_task, markdo
 
 	-- Find and remove old description lines
 	local desc_start = target_task.line_number + 1
+
+	-- Skip UUID comment if present
+	if desc_start <= #lines and lines[desc_start]:match("^%s*<!%-%-%s*gtask:") then
+		desc_start = desc_start + 1
+	end
+
 	local desc_end = desc_start - 1
 
 	-- Find the end of the current description
@@ -1220,15 +1542,21 @@ function M.update_task_from_google(file_path, position_path, google_task, markdo
 		local desc_indent = indent .. "  "
 		local desc_lines = vim.split(description, "\n", { plain = true })
 
+		-- Calculate insertion point (after task line and UUID comment if present)
+		local insert_pos = target_task.line_number + 1
+		if insert_pos <= #lines and lines[insert_pos]:match("^%s*<!%-%-%s*gtask:") then
+			insert_pos = insert_pos + 1
+		end
+
 		-- Insert blank line before description
-		table.insert(lines, target_task.line_number + 1, "")
+		table.insert(lines, insert_pos, "")
 
 		-- Insert description lines
 		for i, desc_line in ipairs(desc_lines) do
 			if desc_line ~= "" then
-				table.insert(lines, target_task.line_number + 1 + i, desc_indent .. desc_line)
+				table.insert(lines, insert_pos + i, desc_indent .. desc_line)
 			else
-				table.insert(lines, target_task.line_number + 1 + i, "")
+				table.insert(lines, insert_pos + i, "")
 			end
 		end
 	end

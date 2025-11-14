@@ -21,7 +21,7 @@ function M.load()
 		-- File doesn't exist, return empty structure
 		return {
 			lists = {}, -- list_name -> google_list_id
-			tasks = {}, -- task_key -> {google_id, list_name, file_path, position_path, parent_key, google_updated, deleted_from_google, last_synced}
+			tasks = {}, -- uuid -> {google_id, list_name, file_path, parent_uuid, google_updated, last_synced}
 		}
 	end
 
@@ -47,6 +47,13 @@ function M.load()
 	-- Ensure structure exists
 	decoded.lists = decoded.lists or {}
 	decoded.tasks = decoded.tasks or {}
+
+	-- Check for old format and migrate if needed
+	if M.is_old_format(decoded) then
+		decoded = M.migrate_to_uuid_format(decoded)
+		-- Save migrated format immediately
+		M.save(decoded)
+	end
 
 	return decoded
 end
@@ -75,16 +82,13 @@ function M.save(mapping)
 	return true
 end
 
---- Generate a tree-position-based key for a task
---- Uses hierarchical position path for stable tracking resilient to line changes
----@param list_name string The task list name
----@param file_path string The file path
----@param position_path string The tree position (e.g., "[0]" or "[0].[1].[2]")
----@return string A tree-position-based key for this task
-function M.generate_task_key(list_name, file_path, position_path)
-	-- Create identifier based on tree position
-	-- Format: list_name|file_path:[pos].[pos]...
-	return string.format("%s|%s:%s", list_name, file_path, position_path)
+--- Generate a UUID-based key for a task
+--- The UUID is extracted from the markdown file and serves as the stable identifier
+---@param uuid string The task's UUID (from <!-- gtask:uuid --> comment)
+---@return string The UUID itself (used as the mapping key)
+function M.generate_task_key(uuid)
+	-- UUID is the key - simple and stable across renames, moves, reorders
+	return uuid
 end
 
 --- Get Google ID for a task
@@ -117,23 +121,20 @@ end
 
 --- Register a task mapping
 ---@param mapping table The mapping data
----@param task_key string The task key
+---@param uuid string The task's UUID (used as the key)
 ---@param google_id string The Google Task ID
 ---@param list_name string The list name
 ---@param file_path string The file path
----@param position_path string The tree position path
----@param parent_key string|nil The parent task key if this is a subtask
+---@param parent_uuid string|nil The parent task's UUID if this is a subtask
 ---@param google_updated string|nil The Google Task's last update timestamp (RFC3339)
-function M.register_task(mapping, task_key, google_id, list_name, file_path, position_path, parent_key, google_updated)
+function M.register_task(mapping, uuid, google_id, list_name, file_path, parent_uuid, google_updated)
 	local now = os.date("!%Y-%m-%dT%H:%M:%SZ")
-	mapping.tasks[task_key] = {
+	mapping.tasks[uuid] = {
 		google_id = google_id,
 		list_name = list_name,
 		file_path = file_path,
-		position_path = position_path,
-		parent_key = parent_key,
+		parent_uuid = parent_uuid,
 		google_updated = google_updated or now, -- Use provided timestamp or current time
-		deleted_from_google = false,
 		last_synced = now,
 	}
 end
@@ -153,20 +154,9 @@ end
 
 --- Remove task from mapping
 ---@param mapping table The mapping data
----@param task_key string The task key to remove
-function M.remove_task(mapping, task_key)
-	mapping.tasks[task_key] = nil
-end
-
---- Mark a task as deleted from Google Tasks
----@param mapping table The mapping data
----@param task_key string The task key
-function M.mark_deleted_from_google(mapping, task_key)
-	local task_data = mapping.tasks[task_key]
-	if task_data then
-		task_data.deleted_from_google = true
-		task_data.last_synced = os.date("!%Y-%m-%dT%H:%M:%SZ")
-	end
+---@param uuid string The task's UUID
+function M.remove_task(mapping, uuid)
+	mapping.tasks[uuid] = nil
 end
 
 --- Clean up orphaned tasks for a specific list
@@ -192,6 +182,56 @@ function M.cleanup_orphaned_tasks(mapping, list_name, current_task_keys)
 	end
 
 	return #to_remove
+end
+
+--- Check if mapping file uses old position-based format
+---@param mapping table The mapping data
+---@return boolean True if old format detected
+function M.is_old_format(mapping)
+	-- Check if any task has position_path field (old format)
+	for _, task_data in pairs(mapping.tasks) do
+		if task_data.position_path then
+			return true
+		end
+	end
+	return false
+end
+
+--- Migrate old position-based mapping to UUID format
+--- This is a one-time migration for existing users
+---@param old_mapping table The old mapping data
+---@return table The migrated mapping with UUID keys
+function M.migrate_to_uuid_format(old_mapping)
+	utils.notify("Migrating mapping file from position-based to UUID format...", vim.log.levels.INFO)
+
+	-- Backup old mapping
+	local backup_path = get_mapping_file_path() .. ".backup"
+	local backup_file = io.open(backup_path, "w")
+	if backup_file then
+		local encoded = vim.fn.json_encode(old_mapping)
+		backup_file:write(encoded)
+		backup_file:close()
+		utils.notify("Created backup at: " .. backup_path, vim.log.levels.INFO)
+	end
+
+	-- Create new mapping with UUID-based structure
+	local new_mapping = {
+		lists = old_mapping.lists or {}, -- Lists remain the same
+		tasks = {}, -- Will be empty - UUIDs will be generated on next sync
+	}
+
+	-- We can't migrate tasks because we don't have UUIDs for them yet
+	-- The next sync will:
+	-- 1. Generate UUIDs for all tasks
+	-- 2. Use title-based fallback matching to reconnect with Google Task IDs
+	-- 3. Create new UUID-based mappings
+
+	utils.notify(
+		"Migration complete. All tasks will be re-matched on next sync using title-based matching.",
+		vim.log.levels.WARN
+	)
+
+	return new_mapping
 end
 
 return M
