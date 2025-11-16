@@ -18,7 +18,7 @@ There are a couple of pain point that I hope to address with this plugin:
 
 First and foremost, my aim to have tasks slot into my current workflow. By that, I mean I do not plan to use it as a "separate" app or interface, rather it should fit inside notes as I take them.
 
-Another major I face is that the "description" field is extremely cumbersome to use. Unable to add any formatting, and the way it is shown is downright horrendous. In here though, it's just another markdown content block. Neat, eh? The next issue is the subtask management in official apps - they are treated as second class citizens. Here they are not.
+Another major issue I face is that the "description" field is extremely cumbersome to use. Unable to add any formatting, and the way it is shown is downright horrendous. In here though, it's just another markdown content block. Neat, eh?
 
 ## Quick Start
 
@@ -86,22 +86,86 @@ You may now update tasks in either markdown_dir or Google Tasks and :GtaskSync t
 ... more notes on space regulations `<-- These notes (list description?) are NOT saved on Google`
 
 - [ ] Check visa requirements | 2025-10-31 `<-- Task with due date (YYYY-MM-DD)`
-- [ ] Submit application | 2025-11-01 09:00 `<-- Task with due date and time (YYYY-MM-DD HH:MM)`
+- [ ] Submit application | 2025-11-01 `<-- Task with sub tasks`
 
       Notes on visa requirements when checking `<-- This is the task's description (any spacing, optional blank line)`
       More notes here (until a double empty line is encountered)
 
-      - [ ] Contact Martian friend who knows stuff `<-- This becomes a sub-task (indented 2 spaces)`
+      - [ ] Contact Martian friend who knows stuff `<-- This becomes a sub-task (indented 2+ spaces)`
 
           Friend's contact number: xxx-yyy-zz `<-- This is sub-task's description`
 ```
 
+**Rules:**
+
+- H1 heading → Google Tasks list name
+- `- [ ]` incomplete, `- [x]` complete
+- `| YYYY-MM-DD` for due dates
+- Subtasks: indent 2+ spaces from parent
+- Descriptions: indented lines after task
+- UUIDs: auto-generated `<!-- gtask:uuid -->` comments (can be hidden, see below)
+
 ## Known Issues
 
-- **Duplicate Tasks** : When synced on more than one machince (or after extensive re-ordering), Google Tasks may sometimes have duplicates.
-- **Task matching**: Uses **positional matching** list→task1,task2→subtask1,subtask2... Optimal use would be to simply add a new task at the end, so other tasks aren't changed. If you move a task to a different line or insert one in between, it will end up deleting/recreating the tasks that have had their positions changed.
-- **File Rename**: Current behaviour for task file renames is undefined.
+- **File Rename**: Current behaviour for task file renames is undefined. (Needs testing)
 - **Time/Recurrence**: Google Tasks API doesn't allow setting a due time or recurrence for tasks :(
 - Please open an issue if you find more... :)
 
-See [gtask.nvim/wiki](https://github.com/p-tupe/gtask.nvim/wiki) for more details!
+## Auto-sync on save
+
+```lua
+vim.api.nvim_create_autocmd("BufWritePost", {
+  pattern = vim.fn.expand("~/gtask.nvim") .. "/*.md",
+  callback = function()
+    vim.cmd(":GtaskSync")
+  end,
+})
+```
+
+OR
+
+```vim
+autocmd BufWritePost ~/gtask.nvim/*.md :GtaskSync
+```
+
+## Hide UUID comments
+
+```lua
+vim.api.nvim_create_autocmd("FileType", {
+  pattern = "markdown",
+  callback = function()
+    vim.defer_fn(function()
+      vim.cmd([[syntax match gtaskComment /<!--\s*gtask:[^>]*-->/ conceal]])
+      vim.opt_local.conceallevel = 2
+      vim.opt_local.concealcursor = "v"
+    end, 0)
+  end,
+})
+```
+
+OR
+
+```vim
+augroup GtaskConceal
+  autocmd!
+  autocmd FileType markdown syntax match gtaskComment /<!--\s*gtask:[^>]*-->/ conceal
+  autocmd FileType markdown setlocal conceallevel=2 concealcursor=v
+augroup END
+```
+
+OR
+
+In `~/.config/nvim/after/syntax/markdown.vim`:
+
+```vim
+syntax match gtaskComment /<!--\s*gtask:[^>]*-->/ conceal
+```
+
+Then in your config:
+
+```vim
+set conceallevel=2
+set concealcursor=v
+```
+
+See [gtask.nvim/wiki](https://github.com/p-tupe/gtask.nvim/tree/main/wiki) for more stuff!
