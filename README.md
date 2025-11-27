@@ -33,7 +33,6 @@ https://github.com/user-attachments/assets/fd17810e-3a4e-4bdd-b3ae-3467d245cf5d
 ```lua
 {
   "p-tupe/gtask.nvim",
-  dependencies = { "nvim-lua/plenary.nvim" },
 }
 
 require("gtask").setup()
@@ -167,5 +166,51 @@ Then in your config:
 set conceallevel=2
 set concealcursor=v
 ```
+
+## Testing
+
+### Unit Tests
+
+Run fast unit tests (no authentication required):
+
+```bash
+make test
+# or
+make test-unit
+```
+
+### End-to-End Tests
+
+Run comprehensive E2E tests against real Google Tasks API:
+
+```bash
+# First, authenticate in Neovim
+nvim -c ":GtaskAuth"
+
+# Then run E2E tests
+make test-e2e
+```
+
+E2E tests cover:
+- Authentication flow
+- Task creation and updates
+- Subtask hierarchies
+- Bidirectional sync
+- Task deletion
+- Edge cases (unicode, special characters)
+- Round-trip data integrity
+
+See [tests/e2e/README.md](tests/e2e/README.md) for detailed E2E test documentation.
+
+## Roadmap
+
+- Make Sync more reliable
+  - Multiple machine sync
+  - File/List renames
+  - Mass removals
+  - Mapping file deleted
+  - Multiple levels of subtasks
+  - Invalid task-description-subtask structure
+- Improve test coverage
 
 See [gtask.nvim/wiki](https://github.com/p-tupe/gtask.nvim/tree/main/wiki) for more stuff!

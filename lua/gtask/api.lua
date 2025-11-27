@@ -5,7 +5,6 @@ local M = {}
 local config = require("gtask.config")
 local store = require("gtask.store")
 local utils = require("gtask.utils")
-local Job = require("plenary.job")
 
 --- Get proxy backend URL from config (dynamically to respect setup() changes)
 ---@return string The proxy base URL
@@ -33,52 +32,48 @@ local function refresh_tokens(refresh_token, callback)
 		refresh_token = refresh_token,
 	})
 
-	Job:new({
-		command = "curl",
-		args = {
-			"-s",
-			"-X",
-			"POST",
-			"-H",
-			"Content-Type: application/json",
-			"-d",
-			request_body,
-			get_proxy_url() .. "/auth/refresh",
-		},
-		on_exit = function(j, return_val)
-			vim.schedule(function()
-				if return_val == 0 then
-					local response = table.concat(j:result())
-					local success, new_tokens = pcall(vim.fn.json_decode, response)
+	vim.system({
+		"curl",
+		"-s",
+		"-X",
+		"POST",
+		"-H",
+		"Content-Type: application/json",
+		"-d",
+		request_body,
+		get_proxy_url() .. "/auth/refresh",
+	}, { text = true }, function(obj)
+		vim.schedule(function()
+			if obj.code == 0 then
+				local success, new_tokens = pcall(vim.fn.json_decode, obj.stdout)
 
-					if not success or not new_tokens or not new_tokens.access_token then
-						utils.notify("Invalid response from token refresh", vim.log.levels.ERROR)
-						if callback then
-							callback(nil, "Invalid refresh response")
-						end
-						return
-					end
-
-					-- Google doesn't always return a new refresh token, preserve the old one
-					if not new_tokens.refresh_token then
-						new_tokens.refresh_token = refresh_token
-					end
-
-					store.save_tokens(new_tokens)
-					utils.notify("Tokens refreshed successfully.")
+				if not success or not new_tokens or not new_tokens.access_token then
+					utils.notify("Invalid response from token refresh", vim.log.levels.ERROR)
 					if callback then
-						callback(new_tokens)
+						callback(nil, "Invalid refresh response")
 					end
-				else
-					local error_msg = table.concat(j:stderr_result())
-					utils.notify("Error refreshing tokens: " .. error_msg, vim.log.levels.ERROR)
-					if callback then
-						callback(nil, error_msg)
-					end
+					return
 				end
-			end)
-		end,
-	}):start()
+
+				-- Google doesn't always return a new refresh token, preserve the old one
+				if not new_tokens.refresh_token then
+					new_tokens.refresh_token = refresh_token
+				end
+
+				store.save_tokens(new_tokens)
+				utils.notify("Tokens refreshed successfully.")
+				if callback then
+					callback(new_tokens)
+				end
+			else
+				local error_msg = obj.stderr or ""
+				utils.notify("Error refreshing tokens: " .. error_msg, vim.log.levels.ERROR)
+				if callback then
+					callback(nil, error_msg)
+				end
+			end
+		end)
+	end)
 end
 
 --- Make an authenticated request to the Google Tasks API
@@ -137,54 +132,50 @@ local function request(opts, callback)
 
 		table.insert(curl_args, opts.url)
 
-		Job:new({
-			command = "curl",
-			args = curl_args,
-			on_exit = function(j, return_val)
-				vim.schedule(function()
-					local result = table.concat(j:result())
+		vim.system(vim.list_extend({ "curl" }, curl_args), { text = true }, function(obj)
+			vim.schedule(function()
+				local result = obj.stdout or ""
 
-					if return_val == 0 and result ~= "" then
-						local success, decoded_result = pcall(vim.fn.json_decode, result)
+				if obj.code == 0 and result ~= "" then
+					local success, decoded_result = pcall(vim.fn.json_decode, result)
 
-						if not success then
-							callback(nil, "Invalid JSON response: " .. result)
+					if not success then
+						callback(nil, "Invalid JSON response: " .. result)
+						return
+					end
+
+					-- Check for API errors
+					if decoded_result and decoded_result.error then
+						if decoded_result.error.code == 401 then
+							-- Token expired, try to refresh
+							if tokens.refresh_token then
+								refresh_tokens(tokens.refresh_token, function(new_tokens)
+									if new_tokens then
+										make_request(new_tokens.access_token) -- Retry with new token
+									else
+										callback(nil, "Failed to refresh token")
+									end
+								end)
+							else
+								callback(nil, "Unauthorized: No refresh token available")
+							end
+							return
+						else
+							callback(nil, "API Error: " .. (decoded_result.error.message or "Unknown error"))
 							return
 						end
-
-						-- Check for API errors
-						if decoded_result and decoded_result.error then
-							if decoded_result.error.code == 401 then
-								-- Token expired, try to refresh
-								if tokens.refresh_token then
-									refresh_tokens(tokens.refresh_token, function(new_tokens)
-										if new_tokens then
-											make_request(new_tokens.access_token) -- Retry with new token
-										else
-											callback(nil, "Failed to refresh token")
-										end
-									end)
-								else
-									callback(nil, "Unauthorized: No refresh token available")
-								end
-								return
-							else
-								callback(nil, "API Error: " .. (decoded_result.error.message or "Unknown error"))
-								return
-							end
-						end
-
-						callback(decoded_result)
-					elseif return_val == 0 then
-						-- Empty response but successful
-						callback({})
-					else
-						local error_msg = table.concat(j:stderr_result())
-						callback(nil, "Request failed: " .. (error_msg ~= "" and error_msg or result))
 					end
-				end)
-			end,
-		}):start()
+
+					callback(decoded_result)
+				elseif obj.code == 0 then
+					-- Empty response but successful
+					callback({})
+				else
+					local error_msg = obj.stderr or ""
+					callback(nil, "Request failed: " .. (error_msg ~= "" and error_msg or result))
+				end
+			end)
+		end)
 	end
 
 	make_request(tokens.access_token)

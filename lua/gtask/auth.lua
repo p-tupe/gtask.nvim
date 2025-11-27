@@ -5,7 +5,6 @@ local M = {}
 local config = require("gtask.config")
 local store = require("gtask.store")
 local utils = require("gtask.utils")
-local Job = require("plenary.job")
 
 --- Get proxy backend URL from config (dynamically to respect setup() changes)
 ---@return string The proxy base URL
@@ -40,43 +39,40 @@ local function poll_for_completion(state, callback)
 			return
 		end
 
-		Job:new({
-			command = "curl",
-			args = {
-				"-s",
-				get_proxy_url() .. "/auth/poll/" .. state,
-			},
-			on_exit = function(j, return_val)
-				vim.schedule(function()
-					if return_val == 0 then
-						local response = table.concat(j:result())
-						local success, data = pcall(vim.fn.json_decode, response)
+		vim.system({
+			"curl",
+			"-s",
+			get_proxy_url() .. "/auth/poll/" .. state,
+		}, { text = true }, function(obj)
+			vim.schedule(function()
+				if obj.code == 0 then
+					local response = obj.stdout or ""
+					local success, data = pcall(vim.fn.json_decode, response)
 
-						if success and data then
-							if data.completed then
-								-- Authentication completed!
-								utils.notify("Authentication successful! Tokens received via proxy.")
-								store.save_tokens(data.tokens)
-								oauth_state.state = nil
-								if callback then
-									callback(data.tokens)
-								end
-							else
-								-- Not completed yet, continue polling
-								vim.defer_fn(do_poll, 5000) -- Poll every 5 seconds
+					if success and data then
+						if data.completed then
+							-- Authentication completed!
+							utils.notify("Authentication successful! Tokens received via proxy.")
+							store.save_tokens(data.tokens)
+							oauth_state.state = nil
+							if callback then
+								callback(data.tokens)
 							end
 						else
-							utils.notify("Error parsing poll response: " .. response, vim.log.levels.ERROR)
-							vim.defer_fn(do_poll, 5000) -- Continue polling despite error
+							-- Not completed yet, continue polling
+							vim.defer_fn(do_poll, 5000) -- Poll every 5 seconds
 						end
 					else
-						local error_msg = table.concat(j:stderr_result())
-						utils.notify("Error polling for auth completion: " .. error_msg, vim.log.levels.ERROR)
+						utils.notify("Error parsing poll response: " .. response, vim.log.levels.ERROR)
 						vim.defer_fn(do_poll, 5000) -- Continue polling despite error
 					end
-				end)
-			end,
-		}):start()
+				else
+					local error_msg = obj.stderr or ""
+					utils.notify("Error polling for auth completion: " .. error_msg, vim.log.levels.ERROR)
+					vim.defer_fn(do_poll, 5000) -- Continue polling despite error
+				end
+			end)
+		end)
 	end
 
 	-- Start polling
@@ -88,49 +84,46 @@ end
 ---@param callback function Optional callback called with auth URL or error
 function M.get_authorization_url(callback)
 	-- Call proxy backend to generate auth URL
-	Job:new({
-		command = "curl",
-		args = {
-			"-s",
-			"-X",
-			"POST",
-			"-H",
-			"Content-Type: application/json",
-			"-d",
-			"{}",
-			get_proxy_url() .. "/auth/start",
-		},
-		on_exit = function(j, return_val)
-			vim.schedule(function()
-				if return_val == 0 then
-					local response = table.concat(j:result())
-					local success, data = pcall(vim.fn.json_decode, response)
+	vim.system({
+		"curl",
+		"-s",
+		"-X",
+		"POST",
+		"-H",
+		"Content-Type: application/json",
+		"-d",
+		"{}",
+		get_proxy_url() .. "/auth/start",
+	}, { text = true }, function(obj)
+		vim.schedule(function()
+			if obj.code == 0 then
+				local response = obj.stdout or ""
+				local success, data = pcall(vim.fn.json_decode, response)
 
-					if success and data and data.authUrl and data.state then
-						-- Store state for token exchange
-						oauth_state.state = data.state
-						utils.notify("DEBUG: Generated auth URL via proxy", vim.log.levels.DEBUG)
+				if success and data and data.authUrl and data.state then
+					-- Store state for token exchange
+					oauth_state.state = data.state
+					utils.notify("DEBUG: Generated auth URL via proxy", vim.log.levels.DEBUG)
 
-						if callback then
-							callback(data.authUrl, nil)
-						end
-					else
-						local error_msg = "Invalid response from auth proxy: " .. response
-						utils.notify(error_msg, vim.log.levels.ERROR)
-						if callback then
-							callback(nil, error_msg)
-						end
+					if callback then
+						callback(data.authUrl, nil)
 					end
 				else
-					local error_msg = "Failed to contact auth proxy: " .. table.concat(j:stderr_result())
+					local error_msg = "Invalid response from auth proxy: " .. response
 					utils.notify(error_msg, vim.log.levels.ERROR)
 					if callback then
 						callback(nil, error_msg)
 					end
 				end
-			end)
-		end,
-	}):start()
+			else
+				local error_msg = "Failed to contact auth proxy: " .. (obj.stderr or "")
+				utils.notify(error_msg, vim.log.levels.ERROR)
+				if callback then
+					callback(nil, error_msg)
+				end
+			end
+		end)
+	end)
 end
 
 --- Start the OAuth 2.0 authentication flow

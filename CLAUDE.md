@@ -222,19 +222,45 @@ go run main.go
 - `REDIRECT_URI` - Must match Google Cloud Console redirect URI configuration
 - `PORT` - Server port (default: 3000)
 
-### Testing Lua Modules
+### Testing
 
-Test specific Lua patterns:
-
+**Unit Tests** (fast, no authentication required):
 ```bash
-lua test_pkce:*
+make test
+# or
+make test-unit
 ```
+
+**End-to-End Tests** (requires authentication, tests against real Google Tasks API):
+```bash
+# First authenticate in Neovim
+nvim -c ":GtaskAuth"
+
+# Then run E2E tests
+make test-e2e
+```
+
+The E2E test suite (`tests/e2e/e2e_spec.lua`) creates a unique test list (e.g., `E2E_Test_List_<timestamp>`) and performs comprehensive testing:
+- Authentication verification
+- Task creation from markdown → Google Tasks
+- Subtask hierarchy and parent-child relationships
+- Task updates (title, status, description, due date)
+- Google Tasks → markdown sync
+- Task deletion detection
+- Edge cases (unicode, special characters)
+- Round-trip data integrity (markdown → Google → markdown)
+
+Each test automatically cleans up after itself by:
+1. Deleting the local test directory (`~/gtask-e2e-test`)
+2. Removing all tasks from the test list in Google Tasks
+
+See `tests/e2e/README.md` for detailed E2E test documentation.
 
 ## Dependencies
 
-- **Plugin**: `plenary.nvim` (HTTP requests, async jobs), `curl` (system command)
+- **Plugin**: `curl` (system command)
 - **Backend**: Go 1.16+ runtime
-- **Neovim**: Built-in `vim.loop` for async operations
+- **Neovim**: Built-in `vim.system` for async operations, `vim.loop` for filesystem operations
 
 ## Current Limitations
 

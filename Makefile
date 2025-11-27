@@ -1,9 +1,19 @@
-.PHONY: test test-unit test-e2e test-verbose test-coverage clean install-deps
+.PHONY: test test-unit test-e2e clean install-deps lint
 
-# Run all tests
+# Run all tests (unit only, not E2E)
 test:
-	@echo "Running all tests..."
-	@busted --pattern=_spec%.lua$
+	@echo "Running unit tests..."
+	@busted tests/unit --pattern=_spec%.lua$
+
+# Run only unit tests
+test-unit:
+	@echo "Running unit tests..."
+	@busted tests/unit --pattern=_spec%.lua$
+
+# Run only E2E tests (requires authentication)
+test-e2e:
+	@chmod +x tests/e2e/run_e2e_simple.lua
+	@nvim -l tests/e2e/run_e2e_simple.lua
 
 # Clean test artifacts
 clean:
@@ -23,11 +33,9 @@ lint:
 # Show help
 help:
 	@echo "Available targets:"
-	@echo "  make test          - Run all tests"
+	@echo "  make test          - Run unit tests only"
 	@echo "  make test-unit     - Run only unit tests"
-	@echo "  make test-e2e      - Run only E2E tests"
-	@echo "  make test-verbose  - Run tests with verbose output"
-	@echo "  make test-coverage - Run tests with coverage report"
+	@echo "  make test-e2e      - Run E2E tests (requires authentication)"
 	@echo "  make clean         - Clean test artifacts"
 	@echo "  make install-deps  - Install test dependencies"
 	@echo "  make lint          - Run linter (requires luacheck)"

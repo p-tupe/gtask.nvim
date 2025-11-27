@@ -1,16 +1,11 @@
 ---Unit tests for Google Tasks hierarchy preservation
 describe("sync module - hierarchy preservation", function()
 	local vim_mock
-	local plenary_mock
 
 	before_each(function()
 		-- Load vim mock
 		vim_mock = require("tests.helpers.vim_mock")
 		vim_mock.reset()
-
-		-- Load plenary mock
-		plenary_mock = require("tests.helpers.plenary_mock")
-		plenary_mock.setup()
 
 		-- Clean up any stale state from previous test runs (CI isolation)
 		-- This prevents tests from being affected by data from previous runs
