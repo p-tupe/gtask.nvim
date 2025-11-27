@@ -99,15 +99,15 @@ You may now update tasks in either markdown_dir or Google Tasks and :GtaskSync t
 
 - H1 heading → Google Tasks list name
 - `- [ ]` incomplete, `- [x]` complete
-- `| YYYY-MM-DD` for due dates
+- `... | YYYY-MM-DD` for due dates
 - Subtasks: indent 2+ spaces from parent
 - Descriptions: indented lines after task
 - UUIDs: auto-generated `<!-- gtask:uuid -->` comments (can be hidden, see below)
 
 ## Known Issues
 
-- **File Rename**: Current behaviour for task file renames is undefined. (Needs testing)
-- **Time/Recurrence**: Google Tasks API doesn't allow setting a due time or recurrence for tasks :(
+- **Limited Heirarchy**: Only parent-child relation in subtasks, no grandchildren (all 1+ level tasks treated as children)
+- **No Time/Recurrence**: Google Tasks API doesn't allow setting a due time or recurrence for tasks :(
 - Please open an issue if you find more... :)
 
 ## Auto-sync on save
@@ -115,6 +115,7 @@ You may now update tasks in either markdown_dir or Google Tasks and :GtaskSync t
 ```lua
 vim.api.nvim_create_autocmd("BufWritePost", {
   pattern = vim.fn.expand("~/gtask.nvim") .. "/*.md",
+  desc = "Sync Google Tasks on writing any file in ~/Notes dir",
   callback = function()
     vim.cmd(":GtaskSync")
   end,
@@ -124,6 +125,7 @@ vim.api.nvim_create_autocmd("BufWritePost", {
 OR
 
 ```vim
+" Sync Google Tasks on writing any file in ~/Notes dir
 autocmd BufWritePost ~/gtask.nvim/*.md :GtaskSync
 ```
 
@@ -132,6 +134,7 @@ autocmd BufWritePost ~/gtask.nvim/*.md :GtaskSync
 ```lua
 vim.api.nvim_create_autocmd("FileType", {
   pattern = "markdown",
+  desc = "Hide the gtask id comments from tasks",
   callback = function()
     vim.defer_fn(function()
       vim.cmd([[syntax match gtaskComment /<!--\s*gtask:[^>]*-->/ conceal]])
@@ -145,6 +148,7 @@ vim.api.nvim_create_autocmd("FileType", {
 OR
 
 ```vim
+"Hide the gtask id comments from tasks
 augroup GtaskConceal
   autocmd!
   autocmd FileType markdown syntax match gtaskComment /<!--\s*gtask:[^>]*-->/ conceal
@@ -167,41 +171,6 @@ set conceallevel=2
 set concealcursor=v
 ```
 
-## Testing
-
-### Unit Tests
-
-Run fast unit tests (no authentication required):
-
-```bash
-make test
-# or
-make test-unit
-```
-
-### End-to-End Tests
-
-Run comprehensive E2E tests against real Google Tasks API:
-
-```bash
-# First, authenticate in Neovim
-nvim -c ":GtaskAuth"
-
-# Then run E2E tests
-make test-e2e
-```
-
-E2E tests cover:
-- Authentication flow
-- Task creation and updates
-- Subtask hierarchies
-- Bidirectional sync
-- Task deletion
-- Edge cases (unicode, special characters)
-- Round-trip data integrity
-
-See [tests/e2e/README.md](tests/e2e/README.md) for detailed E2E test documentation.
-
 ## Roadmap
 
 - Make Sync more reliable
@@ -211,6 +180,7 @@ See [tests/e2e/README.md](tests/e2e/README.md) for detailed E2E test documentati
   - Mapping file deleted
   - Multiple levels of subtasks
   - Invalid task-description-subtask structure
-- Improve test coverage
+- Fix sub-sub-tasks not creating children
+- Fix file rename/delete removing tasks
 
 See [gtask.nvim/wiki](https://github.com/p-tupe/gtask.nvim/tree/main/wiki) for more stuff!
