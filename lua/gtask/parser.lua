@@ -86,17 +86,17 @@ function M.parse_single_task(lines, start_index)
 
 	-- Look for UUID comment immediately after task line (<!-- gtask:uuid -->)
 	local consumed_lines = 1
-	local uuid_found = false
-
-	if start_index + 1 <= #lines then
-		local next_line = lines[start_index + 1]
-		local uuid = M.extract_task_uuid(next_line)
-		if uuid then
-			task.uuid = uuid
-			consumed_lines = consumed_lines + 1
-			uuid_found = true
-		end
-	end
+	-- local uuid_found = false
+	--
+	-- if start_index + 1 <= #lines then
+	-- 	local next_line = lines[start_index + 1]
+	-- 	local uuid = M.extract_task_uuid(next_line)
+	-- 	if uuid then
+	-- 		task.uuid = uuid
+	-- 		consumed_lines = consumed_lines + 1
+	-- 		uuid_found = true
+	-- 	end
+	-- end
 
 	-- Look for description lines (non-task, non-empty lines at least as indented as the task)
 	-- Allow one empty line between task/UUID and description

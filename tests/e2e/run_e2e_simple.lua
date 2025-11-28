@@ -28,12 +28,10 @@ require("gtask").setup({
 local tests_passed = 0
 local tests_failed = 0
 local tests_pending = 0
-local current_suite = ""
 local before_each_fns = {}
 local after_each_fns = {}
 
 local function describe(name, fn)
-	current_suite = name
 	print("\n" .. name)
 	-- Reset lifecycle hooks for each describe block
 	before_each_fns = {}

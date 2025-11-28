@@ -8,15 +8,8 @@ local api = require("gtask.api")
 
 -- E2E test configuration
 local test_dir = vim.fn.expand("~/gtask-e2e-test"):gsub("\n", "")
-local test_list_name = "E2E_Test_List_" .. os.time()
-
--- Helper to log test progress (only for important events)
-local function log(msg)
-	-- Only log errors and warnings, not progress
-	if msg:match("^ERROR:") or msg:match("^Warning:") then
-		print("  [E2E] " .. msg)
-	end
-end
+local md_to_google_list = "E2E_MD_to_Google_" .. os.time()
+local google_to_md_list = "E2E_Google_to_MD_" .. os.time()
 
 -- Helper to wait for async operations
 local function wait_for_completion(max_wait_ms)
@@ -40,21 +33,14 @@ end
 
 -- Helper to write file contents
 local function write_file(filepath, content)
-	-- Ensure parent directory exists
 	local dir = vim.fn.fnamemodify(filepath, ":h")
 	vim.fn.mkdir(dir, "p")
-
 	local file, err = io.open(filepath, "w")
 	if not file then
 		error(string.format("Failed to write file: %s (error: %s)", filepath, tostring(err)))
 	end
 	file:write(content)
 	file:close()
-end
-
--- Helper to delete file
-local function delete_file(filepath)
-	os.remove(filepath)
 end
 
 -- Helper to create test markdown file
@@ -70,14 +56,12 @@ local function sync_and_wait()
 	local sync_error = nil
 
 	sync.sync_directory_with_google(function(err)
-		-- Only capture actual errors (strings), not success values (true/nil)
 		if type(err) == "string" then
 			sync_error = err
 		end
 		done = true
 	end)
 
-	-- Wait for sync to complete (max 30 seconds)
 	local start = vim.loop.now()
 	while not done and (vim.loop.now() - start) < 30000 do
 		vim.wait(100)
@@ -114,16 +98,22 @@ local function delete_all_tasks_in_list(list_name, callback)
 
 			local delete_count = 0
 			local total = #tasks
+			local callback_called = false
+			local errors = {}
 
 			for _, task in ipairs(tasks) do
 				api.delete_task(list.id, task.id, function(_, err3)
 					if err3 then
-						callback(err3)
-						return
+						table.insert(errors, err3)
 					end
 					delete_count = delete_count + 1
-					if delete_count == total then
-						callback(nil)
+					if delete_count == total and not callback_called then
+						callback_called = true
+						if #errors > 0 then
+							callback("Deletion errors: " .. table.concat(errors, ", "))
+						else
+							callback(nil)
+						end
 					end
 				end)
 			end
@@ -131,14 +121,19 @@ local function delete_all_tasks_in_list(list_name, callback)
 	end)
 end
 
+-- Helper to prompt user and wait for Enter key
+local function prompt_user_action(instruction)
+	print("\n" .. string.rep("=", 70))
+	print("USER ACTION REQUIRED:")
+	print(instruction)
+	print("Press ENTER when done...")
+	print(string.rep("=", 70) .. "\n")
+	local _ = io.read()
+end
+
 describe("gtask.nvim E2E", function()
 	-- Setup: Configure plugin for E2E testing
 	before_each(function()
-		log("Setting up test environment")
-		log("Test directory: " .. test_dir)
-		log("Test list name: " .. test_list_name)
-
-		-- Create test directory using vim functions
 		vim.fn.mkdir(test_dir, "p")
 
 		-- Clean up any existing test files
@@ -152,159 +147,68 @@ describe("gtask.nvim E2E", function()
 			markdown_dir = test_dir,
 			verbosity = "error",
 		})
-
-		-- Clean up any existing tasks in the test list (from previous test)
-		local cleanup_done = false
-		delete_all_tasks_in_list(test_list_name, function(err)
-			if err then
-				log("Warning: Pre-test cleanup failed: " .. err)
-			else
-				log("Pre-test cleanup successful")
-			end
-			cleanup_done = true
-		end)
-
-		-- Wait for cleanup to complete
-		local start = vim.loop.now()
-		while not cleanup_done and (vim.loop.now() - start) < 5000 do
-			vim.wait(50)
-		end
-
-		log("Setup complete")
 	end)
 
 	-- Cleanup after each test
 	after_each(function()
-		log("Cleaning up test files")
-		-- Clean up test files using vim function
 		vim.fn.delete(test_dir, "rf")
-		log("Local cleanup complete")
-	end)
-
-	-- Final cleanup: Delete test list from Google Tasks
-	after_each(function()
-		log("Cleaning up test list from Google Tasks")
-		local done = false
-		delete_all_tasks_in_list(test_list_name, function(err)
-			if err then
-				log("Warning: Failed to cleanup test list: " .. err)
-			else
-				log("Google Tasks cleanup successful")
-			end
-			done = true
-		end)
-
-		-- Wait for cleanup
-		local start = vim.loop.now()
-		while not done and (vim.loop.now() - start) < 10000 do
-			vim.wait(100)
-		end
-
-		if not done then
-			log("Warning: Cleanup timed out")
-		end
-
-		-- Rate limiting: wait 3 seconds between tests to avoid quota issues
+		-- Rate limiting: wait 3 seconds between tests
 		vim.wait(3000)
 	end)
 
 	describe("1. Authentication", function()
 		it("should have valid authentication", function()
-			log("Checking authentication status")
-			-- Check if tokens exist
 			local has_tokens = store.has_tokens()
 
 			if not has_tokens then
-				log("ERROR: No authentication tokens found")
-				log("Please run: nvim -c ':GtaskAuth'")
 				pending("Authentication required. Run :GtaskAuth first before E2E tests.")
 			end
 
-			log("Authentication tokens found")
 			assert.is_true(has_tokens)
 
-			-- Verify tokens are loadable
 			local tokens = store.load_tokens()
 			assert.is_not_nil(tokens)
 			assert.is_not_nil(tokens.access_token)
-			log("Token validation successful")
 		end)
 	end)
 
-	describe("2. Basic Task Creation - Markdown to Google", function()
-		it("should create a single task from markdown", function()
-			if not store.has_tokens() then
-				pending("Authentication required")
-			end
-
-			log("Creating test file with single task")
-			-- Create markdown file with single task
-			local content = string.format(
-				[[# %s
-
-	- [ ] Test Task A
-	]],
-				test_list_name
-			)
-
-			create_test_file("test.md", content)
-
-			-- Sync
-			sync_and_wait()
-
-			-- Verify task was created in Google Tasks
-			log("Verifying task in Google Tasks")
-			local verified = false
-			api.get_or_create_list(test_list_name, function(list)
-				api.get_tasks(list.id, function(response)
-					local tasks = response.items or {}
-					log("Found " .. #tasks .. " task(s) in Google Tasks")
-					assert.equals(1, #tasks)
-					assert.equals("Test Task A", tasks[1].title)
-					assert.equals("needsAction", tasks[1].status)
-					verified = true
-				end)
+	describe("2. Markdown to Google (and back to Markdown)", function()
+		-- Clean up before and after this entire suite
+		before_each(function()
+			local cleanup_done = false
+			local cleanup_error = nil
+			delete_all_tasks_in_list(md_to_google_list, function(err)
+				cleanup_error = err
+				cleanup_done = true
 			end)
 
-			-- Wait for verification
-			wait_for_completion(5000)
-			assert.is_true(verified)
-			log("Task verification successful")
-		end)
-
-		it("should create multiple tasks", function()
-			if not store.has_tokens() then
-				pending("Authentication required")
+			local start = vim.loop.now()
+			while not cleanup_done and (vim.loop.now() - start) < 15000 do
+				vim.wait(100)
 			end
 
-			local content = string.format(
-				[[# %s
+			if not cleanup_done then
+				error("Pre-test cleanup timed out after 15 seconds")
+			end
 
-	- [ ] Task A
-	- [ ] Task B
-	- [ ] Task C
-	]],
-				test_list_name
-			)
+			if cleanup_error then
+				error("Pre-test cleanup failed: " .. cleanup_error)
+			end
+		end)
 
-			create_test_file("test.md", content)
-			sync_and_wait()
-
-			-- Verify
-			local verified = false
-			api.get_or_create_list(test_list_name, function(list)
-				api.get_tasks(list.id, function(response)
-					local tasks = response.items or {}
-					assert.equals(3, #tasks)
-					verified = true
-				end)
+		after_each(function()
+			local done = false
+			delete_all_tasks_in_list(md_to_google_list, function(err)
+				done = true
 			end)
 
-			wait_for_completion(5000)
-			assert.is_true(verified)
+			local start = vim.loop.now()
+			while not done and (vim.loop.now() - start) < 10000 do
+				vim.wait(100)
+			end
 		end)
 
-		it("should create task with description", function()
+		it("should create all task variations from markdown", function()
 			if not store.has_tokens() then
 				pending("Authentication required")
 			end
@@ -312,236 +216,123 @@ describe("gtask.nvim E2E", function()
 			local content = string.format(
 				[[# %s
 
+	- [ ] Simple Task
+	- [ ] Task with Due Date | 2025-12-25
+	- [x] Completed Task
 	- [ ] Task with Description
 
-	  This is the description.
-	  It has multiple lines.
-	]],
-				test_list_name
-			)
+	  This is a description.
+	  Multiple lines supported.
 
-			create_test_file("test.md", content)
-			sync_and_wait()
+	- [ ] Task with All Properties | 2025-12-31
 
-			-- Verify
-			local verified = false
-			api.get_or_create_list(test_list_name, function(list)
-				api.get_tasks(list.id, function(response)
-					local tasks = response.items or {}
-					assert.equals(1, #tasks)
-					assert.is_not_nil(tasks[1].notes)
-					assert.is_true(tasks[1].notes:match("This is the description"))
-					verified = true
-				end)
-			end)
-
-			wait_for_completion(5000)
-			assert.is_true(verified)
-		end)
-
-		it("should create task with due date", function()
-			if not store.has_tokens() then
-				pending("Authentication required")
-			end
-
-			local content = string.format(
-				[[# %s
-
-	- [ ] Task with Date | 2025-12-25
-	]],
-				test_list_name
-			)
-
-			create_test_file("test.md", content)
-			sync_and_wait()
-
-			-- Verify
-			local verified = false
-			api.get_or_create_list(test_list_name, function(list)
-				api.get_tasks(list.id, function(response)
-					local tasks = response.items or {}
-					assert.equals(1, #tasks)
-					assert.is_not_nil(tasks[1].due)
-					assert.is_true(tasks[1].due:match("2025%-12%-25"))
-					verified = true
-				end)
-			end)
-
-			wait_for_completion(5000)
-			assert.is_true(verified)
-		end)
-
-		it("should create completed task", function()
-			if not store.has_tokens() then
-				pending("Authentication required")
-			end
-
-			local content = string.format(
-				[[# %s
-
-	- [x] Completed Task
-	]],
-				test_list_name
-			)
-
-			create_test_file("test.md", content)
-			sync_and_wait()
-
-			local verified = false
-			api.get_or_create_list(test_list_name, function(list)
-				api.get_tasks(list.id, function(response)
-					local tasks = response.items or {}
-					assert.equals(1, #tasks)
-					assert.equals("completed", tasks[1].status)
-					verified = true
-				end)
-			end)
-
-			wait_for_completion(5000)
-			assert.is_true(verified)
-		end)
-	end)
-
-	describe("3. Subtasks and Hierarchy", function()
-		it("should create subtasks with proper parent relationship", function()
-			if not store.has_tokens() then
-				pending("Authentication required")
-			end
-
-			local content = string.format(
-				[[# %s
+	  Complete task with everything.
 
 	- [ ] Parent Task
 	  - [ ] Subtask 1
-	  - [ ] Subtask 2
+	  - [ ] Subtask with Description
+
+	    Subtask description here.
+
+	  - [ ] Subtask with Due Date | 2026-01-15
 	]],
-				test_list_name
+				md_to_google_list
 			)
 
 			create_test_file("test.md", content)
 			sync_and_wait()
 
-			-- Verify hierarchy
+			-- Verify all tasks in Google
 			local verified = false
-			api.get_or_create_list(test_list_name, function(list)
+			api.get_or_create_list(md_to_google_list, function(list)
 				api.get_tasks(list.id, function(response)
 					local tasks = response.items or {}
-					assert.equals(3, #tasks)
+					assert.equals(9, #tasks, string.format("Expected 9 tasks, got %d", #tasks))
 
-					-- Find parent and subtasks
-					local parent = nil
-					local subtasks = {}
-
-					for _, task in ipairs(tasks) do
-						if task.title == "Parent Task" then
-							parent = task
-						elseif task.parent then
-							table.insert(subtasks, task)
-						end
-					end
-
-					assert.is_not_nil(parent)
-					assert.equals(2, #subtasks)
-
-					-- Verify subtasks have correct parent
-					for _, subtask in ipairs(subtasks) do
-						assert.equals(parent.id, subtask.parent)
-					end
-
-					verified = true
-				end)
-			end)
-
-			wait_for_completion(5000)
-			assert.is_true(verified)
-		end)
-
-    --
-		-- TODO: The one below fails, needs work to handle 2+ level heirarchy
-    --
-
-		it("should handle nested subtasks", function()
-			if not store.has_tokens() then
-				pending("Authentication required")
-			end
-
-			local content = string.format(
-				[[# %s
-
-	- [ ] Parent
-	  - [ ] Child
-	    - [ ] Grandchild
-	]],
-				test_list_name
-			)
-
-			create_test_file("test.md", content)
-			sync_and_wait()
-
-			-- Verify three-level hierarchy
-			local verified = false
-			api.get_or_create_list(test_list_name, function(list)
-				api.get_tasks(list.id, function(response)
-					local tasks = response.items or {}
-					assert.equals(3, #tasks)
-
-					-- Build hierarchy map
 					local task_map = {}
 					for _, task in ipairs(tasks) do
 						task_map[task.title] = task
 					end
 
-					-- Verify hierarchy
-					assert.is_nil(task_map["Parent"].parent)
-					assert.equals(task_map["Parent"].id, task_map["Child"].parent)
-					assert.equals(task_map["Child"].id, task_map["Grandchild"].parent)
+					-- Verify each task variation
+					assert.is_not_nil(task_map["Simple Task"])
+					assert.equals("needsAction", task_map["Simple Task"].status)
+
+					assert.is_not_nil(task_map["Task with Due Date"])
+					assert.is_true(task_map["Task with Due Date"].due:match("2025%-12%-25"))
+
+					assert.is_not_nil(task_map["Completed Task"])
+					assert.equals("completed", task_map["Completed Task"].status)
+
+					assert.is_not_nil(task_map["Task with Description"])
+					assert.is_true(task_map["Task with Description"].notes:match("This is a description"))
+
+					assert.is_not_nil(task_map["Task with All Properties"])
+					assert.is_true(task_map["Task with All Properties"].due:match("2025%-12%-31"))
+					assert.is_true(task_map["Task with All Properties"].notes:match("Complete task with everything"))
+
+					assert.is_not_nil(task_map["Parent Task"])
+					assert.is_nil(task_map["Parent Task"].parent)
+
+					assert.is_not_nil(task_map["Subtask 1"])
+					assert.equals(task_map["Parent Task"].id, task_map["Subtask 1"].parent)
+
+					assert.is_not_nil(task_map["Subtask with Description"])
+					assert.equals(task_map["Parent Task"].id, task_map["Subtask with Description"].parent)
+					assert.is_true(task_map["Subtask with Description"].notes:match("Subtask description here"))
+
+					assert.is_not_nil(task_map["Subtask with Due Date"])
+					assert.equals(task_map["Parent Task"].id, task_map["Subtask with Due Date"].parent)
+					assert.is_true(task_map["Subtask with Due Date"].due:match("2026%-01%-15"))
 
 					verified = true
 				end)
 			end)
 
-			wait_for_completion(5000)
+			wait_for_completion(10000)
 			assert.is_true(verified)
 		end)
 
-		------------------------
-	end)
-
-	describe("4. Task Updates", function()
-		--
-		-- TODO: The one below deletes and creates new task, needs to work with gtask ids
-		--
-		it("should update task title", function()
+		it("should update task title from markdown to Google", function()
 			if not store.has_tokens() then
 				pending("Authentication required")
 			end
 
-			-- Create initial task
 			local content = string.format(
 				[[# %s
 
 	- [ ] Original Title
 	]],
-				test_list_name
+				md_to_google_list
 			)
 
 			local filepath = create_test_file("test.md", content)
 			sync_and_wait()
+			vim.wait(1000)
+
+			-- Read UUID
+			local file_content = read_file(filepath)
+			assert.is_true(file_content:match("<!%-%- gtask:"))
+			local uuid = file_content:match("<!%-%- gtask:([%w%-]+)%s*%-%->")
+			assert.is_not_nil(uuid)
 
 			-- Update title
-			content = string.format(
+			local updated_content = string.format(
 				[[# %s
 
 	- [ ] Updated Title
+	<!-- gtask:%s -->
 	]],
-				test_list_name
+				md_to_google_list,
+				uuid
 			)
-			write_file(filepath, content)
+			write_file(filepath, updated_content)
+			vim.wait(2000)
 			sync_and_wait()
 
-			-- Verify update
+			-- Verify in Google
 			local verified = false
-			api.get_or_create_list(test_list_name, function(list)
+			api.get_or_create_list(md_to_google_list, function(list)
 				api.get_tasks(list.id, function(response)
 					local tasks = response.items or {}
 					assert.equals(1, #tasks)
@@ -550,264 +341,194 @@ describe("gtask.nvim E2E", function()
 				end)
 			end)
 
-			wait_for_completion(5000)
+			wait_for_completion(10000)
 			assert.is_true(verified)
 		end)
 
-		--
-		-- TODO: The one below deletes the task and doesn't sync completed one, needs to work with gtask ids
-		--
-		it("should update completion status", function()
+		it("should sync from Google back to markdown (round-trip)", function()
 			if not store.has_tokens() then
 				pending("Authentication required")
 			end
 
-			-- Create incomplete task
 			local content = string.format(
 				[[# %s
 
-	- [ ] Task to Complete
+	- [ ] Round Trip Task | 2025-12-25
+
+	  Task description here
 	]],
-				test_list_name
+				md_to_google_list
 			)
 
 			local filepath = create_test_file("test.md", content)
 			sync_and_wait()
 
-			content = string.format(
-				[[# %s
+			-- Delete markdown file
+			vim.fn.delete(filepath)
 
-	- [x] Task to Complete
-	]],
-				test_list_name
-			)
-			write_file(filepath, content)
+			-- Sync should recreate from Google
 			sync_and_wait()
 
-			local verified = false
-			api.get_or_create_list(test_list_name, function(list)
-				api.get_tasks(list.id, function(response)
-					local tasks = response.items or {}
-					assert.equals(1, #tasks)
-					assert.equals("completed", tasks[1].status)
-					verified = true
-				end)
-			end)
+			-- Verify file recreated
+			local normalized_name = md_to_google_list:lower():gsub("[%s_]+", "-"):gsub('[/:*?"<>|\\]', "")
+			local expected_file = test_dir .. "/" .. normalized_name .. ".md"
+			assert.equals(1, vim.fn.filereadable(expected_file))
 
-			wait_for_completion(5000)
-			assert.is_true(verified)
+			local recreated_content = read_file(expected_file)
+			assert.is_not_nil(recreated_content)
+			assert.is_true(recreated_content:match("Round Trip Task"))
+			assert.is_true(recreated_content:match("Task description here"))
+			assert.is_true(recreated_content:match("2025%-12%-25"))
 		end)
 	end)
 
-	describe("5. Google to Markdown Sync", function()
-		it("should sync tasks created in Google to markdown", function()
+	describe("3. Google to Markdown (Manual Actions)", function()
+		-- Clean up before and after this entire suite
+		before_each(function()
+			local cleanup_done = false
+			delete_all_tasks_in_list(google_to_md_list, function(err)
+				cleanup_done = true
+			end)
+
+			local start = vim.loop.now()
+			while not cleanup_done and (vim.loop.now() - start) < 15000 do
+				vim.wait(100)
+			end
+		end)
+
+		after_each(function()
+			local done = false
+			delete_all_tasks_in_list(google_to_md_list, function(err)
+				done = true
+			end)
+
+			local start = vim.loop.now()
+			while not done and (vim.loop.now() - start) < 10000 do
+				vim.wait(100)
+			end
+		end)
+
+		it("should sync tasks created manually in Google Tasks", function()
 			if not store.has_tokens() then
 				pending("Authentication required")
 			end
 
-			-- Create task directly in Google Tasks
+			-- Ensure list exists
+			local list_ready = false
+			api.get_or_create_list(google_to_md_list, function(list)
+				list_ready = true
+			end)
+			wait_for_completion(5000)
+			assert.is_true(list_ready)
+
+			prompt_user_action(
+				string.format(
+					"1. Open Google Tasks (https://tasks.google.com)\n   2. Find list: %s\n   3. Create these tasks:\n      - Manual Task\n      - Task with Description (add description: 'Test description')\n      - Completed Task (mark as complete)\n      - Task with Due Date (set to Dec 31, 2025)",
+					google_to_md_list
+				)
+			)
+
+			print("Syncing now...")
+			sync_and_wait()
+
+			local normalized_name = google_to_md_list:lower():gsub("[%s_]+", "-"):gsub('[/:*?"<>|\\]', "")
+			local expected_file = test_dir .. "/" .. normalized_name .. ".md"
+			assert.equals(1, vim.fn.filereadable(expected_file))
+
+			local content = read_file(expected_file)
+			assert.is_not_nil(content)
+			assert.is_true(content:match("Manual Task"))
+			assert.is_true(content:match("Task with Description"))
+			assert.is_true(content:match("Test description"))
+			assert.is_true(content:match("Completed Task"))
+			assert.is_true(content:match("%- %[x%]"))
+			assert.is_true(content:match("Task with Due Date"))
+			assert.is_true(content:match("2025%-12%-31"))
+		end)
+
+		it("should sync subtasks created in Google", function()
+			if not store.has_tokens() then
+				pending("Authentication required")
+			end
+
+			prompt_user_action(
+				string.format(
+					"1. In Google Tasks, find list: %s\n   2. Create task: Parent from Google\n   3. Create SUBTASK under it: Child from Google",
+					google_to_md_list
+				)
+			)
+
+			sync_and_wait()
+
+			local normalized_name = google_to_md_list:lower():gsub("[%s_]+", "-"):gsub('[/:*?"<>|\\]', "")
+			local expected_file = test_dir .. "/" .. normalized_name .. ".md"
+			local content = read_file(expected_file)
+
+			assert.is_not_nil(content)
+			assert.is_true(content:match("Parent from Google"))
+			assert.is_true(content:match("Child from Google"))
+
+			-- Verify indentation
+			local lines = {}
+			for line in content:gmatch("[^\r\n]+") do
+				table.insert(lines, line)
+			end
+
+			local parent_line, child_line
+			for i, line in ipairs(lines) do
+				if line:match("Parent from Google") then
+					parent_line = i
+				end
+				if line:match("Child from Google") then
+					child_line = i
+				end
+			end
+
+			assert.is_not_nil(parent_line)
+			assert.is_not_nil(child_line)
+
+			local parent_indent = lines[parent_line]:match("^(%s*)")
+			local child_indent = lines[child_line]:match("^(%s*)")
+			assert.is_true(#child_indent > #parent_indent)
+		end)
+
+		it("should sync task updates from Google to markdown", function()
+			if not store.has_tokens() then
+				pending("Authentication required")
+			end
+
+			-- Create initial task via code
 			local task_created = false
-			api.get_or_create_list(test_list_name, function(list)
+			api.get_or_create_list(google_to_md_list, function(list)
 				api.create_task(list.id, {
-					title = "Google Task",
+					title = "Original Google Title",
 					status = "needsAction",
 				}, function()
 					task_created = true
 				end)
 			end)
-
-			-- Wait for task creation
 			wait_for_completion(5000)
 			assert.is_true(task_created)
 
-			-- Sync to markdown
 			sync_and_wait()
+			vim.wait(1000)
 
-			--
-			-- TODO: This does not check for an exact list name, just matches task title
-			--
-			-- Verify markdown file was created
-			local expected_file = test_dir .. "/e2e_test_list_" .. os.time() .. ".md"
-			-- The filename is normalized, we need to find it
-			local files = vim.fn.glob(test_dir .. "/*.md", false, true)
-			assert.is_true(#files > 0)
-
-			-- Read and verify content
-			local found_task = false
-			for _, file in ipairs(files) do
-				local content = read_file(file)
-				if content and content:match("Google Task") then
-					found_task = true
-					break
-				end
-			end
-
-			assert.is_true(found_task)
-		end)
-	end)
-
-	describe("6. Task Deletion", function()
-		it("should delete task from Google when removed from markdown", function()
-			if not store.has_tokens() then
-				pending("Authentication required")
-			end
-
-			-- Create task
-			local content = string.format(
-				[[# %s
-
-	- [ ] Task to Delete
-	]],
-				test_list_name
+			prompt_user_action(
+				string.format(
+					"1. In Google Tasks, find list: %s\n   2. Find task: Original Google Title\n   3. Rename to: Updated Google Title",
+					google_to_md_list
+				)
 			)
 
-			local filepath = create_test_file("test.md", content)
 			sync_and_wait()
 
-			-- Verify task exists
-			local task_exists = false
-			api.get_or_create_list(test_list_name, function(list)
-				api.get_tasks(list.id, function(response)
-					task_exists = #(response.items or {}) == 1
-				end)
-			end)
-			wait_for_completion(5000)
-			assert.is_true(task_exists)
+			local normalized_name = google_to_md_list:lower():gsub("[%s_]+", "-"):gsub('[/:*?"<>|\\]', "")
+			local expected_file = test_dir .. "/" .. normalized_name .. ".md"
+			local content = read_file(expected_file)
 
-			-- Delete task from markdown
-			content = string.format(
-				[[# %s
-	]],
-				test_list_name
-			)
-			write_file(filepath, content)
-			sync_and_wait()
-
-			-- Verify task deleted from Google
-			local verified = false
-			api.get_or_create_list(test_list_name, function(list)
-				api.get_tasks(list.id, function(response)
-					local tasks = response.items or {}
-					assert.equals(0, #tasks)
-					verified = true
-				end)
-			end)
-
-			wait_for_completion(5000)
-			assert.is_true(verified)
-		end)
-	end)
-
-	describe("7. Edge Cases", function()
-		it("should handle special characters in task title", function()
-			if not store.has_tokens() then
-				pending("Authentication required")
-			end
-
-			local content = string.format(
-				[[# %s
-
-	- [ ] Task with "quotes" and 'apostrophes'
-	]],
-				test_list_name
-			)
-
-			create_test_file("test.md", content)
-			sync_and_wait()
-
-			-- Verify
-			local verified = false
-			api.get_or_create_list(test_list_name, function(list)
-				api.get_tasks(list.id, function(response)
-					local tasks = response.items or {}
-					assert.equals(1, #tasks)
-					assert.is_true(tasks[1].title:match("quotes"))
-					verified = true
-				end)
-			end)
-
-			wait_for_completion(5000)
-			assert.is_true(verified)
-		end)
-
-		it("should handle unicode characters", function()
-			if not store.has_tokens() then
-				pending("Authentication required")
-			end
-
-			local content = string.format(
-				[[# %s
-
-	- [ ] Task with émojis 🎉 and 中文字符
-	]],
-				test_list_name
-			)
-
-			create_test_file("test.md", content)
-			sync_and_wait()
-
-			-- Verify
-			local verified = false
-			api.get_or_create_list(test_list_name, function(list)
-				api.get_tasks(list.id, function(response)
-					local tasks = response.items or {}
-					assert.equals(1, #tasks)
-					assert.is_true(tasks[1].title:match("émojis"))
-					verified = true
-				end)
-			end)
-
-			wait_for_completion(5000)
-			assert.is_true(verified)
-		end)
-	end)
-
-	describe("8. Round-Trip Tests", function()
-		--
-		-- TODO: This one is a bug - it deletes all tasks if a list is deleted
-		-- The list should be recreated
-		--
-		it("should preserve data through Markdown→Google→Markdown cycle", function()
-			if not store.has_tokens() then
-				pending("Authentication required")
-			end
-
-			local original_content = string.format(
-				[[# %s
-
-		- [ ] Round Trip Task | 2025-12-25
-
-		  Task description here
-		]],
-				test_list_name
-			)
-
-			local filepath = create_test_file("test.md", original_content)
-			sync_and_wait()
-
-			-- Delete markdown file
-			delete_file(filepath)
-
-			-- Sync again (should recreate from Google)
-			sync_and_wait()
-
-			-- Verify file was recreated
-			local files = vim.fn.glob(test_dir .. "/*.md", false, true)
-			assert.is_true(#files > 0)
-
-			-- Verify content
-			local found = false
-			for _, file in ipairs(files) do
-				local content = read_file(file)
-				if content and content:match("Round Trip Task") then
-					assert.is_true(content:match("Task description here"))
-					assert.is_true(content:match("2025%-12%-25"))
-					found = true
-					break
-				end
-			end
-
-			assert.is_true(found)
+			assert.is_not_nil(content)
+			assert.is_true(content:match("Updated Google Title"))
+			assert.is_false(content:match("Original Google Title"))
 		end)
 	end)
 end)

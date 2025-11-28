@@ -155,6 +155,13 @@ end
 ---@param gtask table Google task
 ---@return boolean True if update is needed
 function M.task_needs_update(mdtask, gtask)
+	-- Check title
+	local md_title = mdtask.title or ""
+	local g_title = gtask.title or ""
+	if md_title ~= g_title then
+		return true
+	end
+
 	-- Check completion status
 	local md_completed = mdtask.completed
 	local g_completed = gtask.status == "completed"
@@ -369,11 +376,19 @@ function M.perform_twoway_sync(sync_state, callback)
 	for task_uuid, mapping_data in pairs(map.tasks) do
 		if mapping_data.list_name == list_name and not md_task_uuids_set[task_uuid] then
 			-- Task UUID was in mapping but not in current markdown
-			table.insert(deleted_from_markdown, {
-				uuid = task_uuid,
-				google_id = mapping_data.google_id,
-				mapping_data = mapping_data,
-			})
+
+			-- Check if source file still exists
+			local source_file = mapping_data.file_path
+			local file_exists = vim.fn.filereadable(source_file) == 1
+
+			if file_exists then
+				-- File exists but task removed → User deleted it
+				table.insert(deleted_from_markdown, {
+					uuid = task_uuid,
+					google_id = mapping_data.google_id,
+					mapping_data = mapping_data,
+				})
+			end
 		end
 	end
 
@@ -701,9 +716,9 @@ function M.execute_twoway_sync(
 					end)
 
 					for _, task_info in ipairs(file_tasks) do
-						embed_task_uuid(file_path, task_info.line_number, task_info.uuid, function(success, err_msg)
-							if not success and err_msg then
-								table.insert(embedding_errors, err_msg)
+						embed_task_uuid(file_path, task_info.line_number, task_info.uuid, function(success1, err_msg1)
+							if not success1 and err_msg1 then
+								table.insert(embedding_errors, err_msg1)
 							end
 						end)
 					end
@@ -748,7 +763,6 @@ function M.execute_twoway_sync(
 					op.google_task.id,
 					list_name,
 					file_path,
-					
 					op.parent_uuid,
 					google_updated
 				)
@@ -826,7 +840,7 @@ function M.execute_twoway_sync(
 						created_task.id,
 						list_name,
 						file_path,
-						
+
 						nil, -- parent_uuid is nil for top-level tasks
 						created_task.updated
 					)
@@ -1064,7 +1078,11 @@ function M.write_google_tasks_to_markdown(tasks, markdown_dir, list_name, existi
 	local existing_google_ids = {}
 	for _, mapping_data in pairs(map.tasks) do
 		if mapping_data.list_name == list_name and mapping_data.google_id then
-			existing_google_ids[mapping_data.google_id] = true
+			-- Only consider task as existing if its source file actually exists
+			local source_file = mapping_data.file_path
+			if source_file and vim.fn.filereadable(source_file) == 1 then
+				existing_google_ids[mapping_data.google_id] = true
+			end
 		end
 	end
 
@@ -1378,7 +1396,7 @@ end
 ---@param uuid string Task UUID
 ---@param callback function Callback (success, err_msg)
 function M.delete_task_by_uuid(file_path, uuid, callback)
-	local target_task, lines = find_task_by_uuid(file_path, uuid)
+	local target_task = find_task_by_uuid(file_path, uuid)
 
 	if not target_task then
 		if callback then
