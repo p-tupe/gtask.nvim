@@ -86,17 +86,15 @@ function M.parse_single_task(lines, start_index)
 
 	-- Look for UUID comment immediately after task line (<!-- gtask:uuid -->)
 	local consumed_lines = 1
-	-- local uuid_found = false
-	--
-	-- if start_index + 1 <= #lines then
-	-- 	local next_line = lines[start_index + 1]
-	-- 	local uuid = M.extract_task_uuid(next_line)
-	-- 	if uuid then
-	-- 		task.uuid = uuid
-	-- 		consumed_lines = consumed_lines + 1
-	-- 		uuid_found = true
-	-- 	end
-	-- end
+
+	if start_index + 1 <= #lines then
+		local next_line = lines[start_index + 1]
+		local uuid = M.extract_task_uuid(next_line)
+		if uuid then
+			task.uuid = uuid
+			consumed_lines = consumed_lines + 1
+		end
+	end
 
 	-- Look for description lines (non-task, non-empty lines at least as indented as the task)
 	-- Allow one empty line between task/UUID and description
@@ -112,30 +110,37 @@ function M.parse_single_task(lines, start_index)
 			break
 		end
 
-		-- Handle empty lines
-		if desc_line:match("^%s*$") then
-			-- Allow one empty line before description starts
-			if #description_parts == 0 and not skipped_initial_empty then
-				skipped_initial_empty = true
-				consumed_lines = consumed_lines + 1
-			else
-				-- Empty line after description has started - stop here
-				break
-			end
-		else
-			-- Check if line is indented at least as much as the task
-			local line_indent = desc_line:match("^(%s*)")
-			if #line_indent >= task_indent_chars then
-				-- Line is properly indented, include it in description
-				local content = desc_line:match("^%s*(.+)%s*$")
-				if content then
-					table.insert(description_parts, content)
+		-- Skip UUID comments (shouldn't be in description)
+		local is_uuid_comment = M.extract_task_uuid(desc_line)
+		if not is_uuid_comment then
+			-- Handle empty lines
+			if desc_line:match("^%s*$") then
+				-- Allow one empty line before description starts
+				if #description_parts == 0 and not skipped_initial_empty then
+					skipped_initial_empty = true
 					consumed_lines = consumed_lines + 1
+				else
+					-- Empty line after description has started - stop here
+					break
 				end
 			else
-				-- Line is not indented enough, stop here
-				break
+				-- Check if line is indented at least as much as the task
+				local line_indent = desc_line:match("^(%s*)")
+				if #line_indent >= task_indent_chars then
+					-- Line is properly indented, include it in description
+					local content = desc_line:match("^%s*(.+)%s*$")
+					if content then
+						table.insert(description_parts, content)
+						consumed_lines = consumed_lines + 1
+					end
+				else
+					-- Line is not indented enough, stop here
+					break
+				end
 			end
+		else
+			-- UUID comment found, skip it
+			consumed_lines = consumed_lines + 1
 		end
 	end
 

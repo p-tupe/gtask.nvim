@@ -414,6 +414,29 @@ function M.create_task_list(list_name, callback)
 	end)
 end
 
+--- Delete a task list by ID
+---@param list_id string The ID of the task list to delete
+---@param callback function Callback called with success status or error
+function M.delete_task_list(list_id, callback)
+	if not list_id or list_id == "" then
+		if callback then
+			callback(false, "List ID is required")
+		end
+		return
+	end
+
+	request({
+		method = "DELETE",
+		url = string.format("https://tasks.googleapis.com/tasks/v1/users/@me/lists/%s", list_id),
+	}, function(response, err)
+		if err then
+			callback(false, err)
+		else
+			callback(true, nil)
+		end
+	end)
+end
+
 --- Get or create a task list by name
 --- Finds an existing list by name, or creates it if it doesn't exist
 ---@param list_name string The name of the task list
