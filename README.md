@@ -8,6 +8,12 @@
 <img alt="GitHub last commit" src="https://img.shields.io/github/last-commit/p-tupe/gtask.nvim">
 <br />
 
+> Note:
+>
+> _This plugin is complete!_
+>
+> It has all the features I set out to develop, and I have fixed all the bugs I've encountered in my daily usage. With minimal dependencies and a pure lua implementation, the code should keep working for future neovim versions without any issues. If you do encounter problems, feel free to open up a new GitHub Issue and I will take a looksie. Besides that, I won't be updating this codebase anymore.
+
 ## Motivation
 
 Over time, I have consolidated all my stuff into neovim - local CSVs over spreadsheet apps, markdown notes instead of the latest flavor of Evernote, journals, progress trackers, dev logs, so on and so forth.
