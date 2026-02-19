@@ -8,7 +8,6 @@ local api = require("gtask.api")
 
 -- E2E test configuration
 local test_dir = vim.fn.expand("~/gtask-e2e-test"):gsub("\n", "")
-local md_to_google_list = "E2E_MD_to_Google_" .. os.time()
 local google_to_md_list = "E2E_Google_to_MD_" .. os.time()
 
 -- Helper to get tomorrow's date in YYYY-MM-DD format
@@ -53,13 +52,6 @@ local function write_file(filepath, content)
 	end
 	file:write(content)
 	file:close()
-end
-
--- Helper to create test markdown file
-local function create_test_file(filename, content)
-	local filepath = test_dir .. "/" .. filename
-	write_file(filepath, content)
-	return filepath
 end
 
 -- Helper to sync and wait
@@ -475,13 +467,13 @@ describe("gtask.nvim E2E", function()
 	describe("3. Google to Markdown (Manual Actions)", function()
 		-- Clean up before and after this entire suite
 		before_each(function()
-			local cleanup_done = false
+			local suite_cleanup_done = false
 			delete_all_tasks_in_list(google_to_md_list, function(err)
-				cleanup_done = true
+				suite_cleanup_done = true
 			end)
 
-			local start = vim.loop.now()
-			while not cleanup_done and (vim.loop.now() - start) < 15000 do
+			local suite_start = vim.loop.now()
+			while not suite_cleanup_done and (vim.loop.now() - suite_start) < 15000 do
 				vim.wait(100)
 			end
 		end)
@@ -492,8 +484,8 @@ describe("gtask.nvim E2E", function()
 				done = true
 			end)
 
-			local start = vim.loop.now()
-			while not done and (vim.loop.now() - start) < 10000 do
+			local after_start = vim.loop.now()
+			while not done and (vim.loop.now() - after_start) < 10000 do
 				vim.wait(100)
 			end
 		end)

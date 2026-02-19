@@ -49,7 +49,7 @@ function M.decode(str)
 	cleaned = cleaned:gsub("false", "false")
 
 	-- Very basic decoder - for production use a proper JSON library
-	local fn, err = load("return " .. cleaned)
+	local fn, err = (loadstring or load)("return " .. cleaned)
 	if not fn then
 		error("JSON decode error: " .. tostring(err))
 	end

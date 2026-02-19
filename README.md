@@ -10,7 +10,7 @@
 
 > Note:
 >
-> _This plugin is complete!_
+> **This plugin is complete!**
 >
 > It has all the features I set out to develop, and I have fixed all the bugs I've encountered in my daily usage. With minimal dependencies and a pure lua implementation, the code should keep working for future neovim versions without any issues. If you do encounter problems, feel free to open up a new GitHub Issue and I will take a looksie. Besides that, I won't be updating this codebase anymore.
 
